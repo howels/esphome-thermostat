@@ -546,15 +546,15 @@ font:
         glyphs: [
           "\U000F050F", # mdi:thermometer
           "\U000F02E3", # mdi:bed
-          "\U000F04D2", # mdi:stove
+          "\U000F04DE", # mdi:stove
           "\U000F1239", # mdi:desk
           "\U000F09A0", # mdi:shower
           "\U000F1061", # mdi:table-chair
           "\U000F02DC", # mdi:home
-          "\U000F12CC", # mdi:stairs
+          "\U000F04CD", # mdi:stairs
           "\U000F072A", # mdi:washing-machine
           "\U000F06D9", # mdi:garage
-          "\U000F0718", # mdi:baby-carriage
+          "\U000F068F", # mdi:baby-carriage
           "\U000F0438", # mdi:radiator
           "\U000F058E", # mdi:water-percent
           "\U000F0425", # mdi:power
@@ -606,15 +606,15 @@ font:
         glyphs: [
           "\U000F050F", # mdi:thermometer
           "\U000F02E3", # mdi:bed
-          "\U000F04D2", # mdi:stove
+          "\U000F04DE", # mdi:stove
           "\U000F1239", # mdi:desk
           "\U000F09A0", # mdi:shower
           "\U000F1061", # mdi:table-chair
           "\U000F02DC", # mdi:home
-          "\U000F12CC", # mdi:stairs
+          "\U000F04CD", # mdi:stairs
           "\U000F072A", # mdi:washing-machine
           "\U000F06D9", # mdi:garage
-          "\U000F0718", # mdi:baby-carriage
+          "\U000F068F", # mdi:baby-carriage
           "\U000F0438", # mdi:radiator
           "\U000F058E", # mdi:water-percent
           "\U000F0425", # mdi:power
@@ -666,15 +666,15 @@ font:
         glyphs: [
           "\U000F050F", # mdi:thermometer
           "\U000F02E3", # mdi:bed
-          "\U000F04D2", # mdi:stove
+          "\U000F04DE", # mdi:stove
           "\U000F1239", # mdi:desk
           "\U000F09A0", # mdi:shower
           "\U000F1061", # mdi:table-chair
           "\U000F02DC", # mdi:home
-          "\U000F12CC", # mdi:stairs
+          "\U000F04CD", # mdi:stairs
           "\U000F072A", # mdi:washing-machine
           "\U000F06D9", # mdi:garage
-          "\U000F0718", # mdi:baby-carriage
+          "\U000F068F", # mdi:baby-carriage
           "\U000F0438", # mdi:radiator
           "\U000F058E", # mdi:water-percent
           "\U000F0425", # mdi:power

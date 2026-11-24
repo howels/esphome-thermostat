@@ -40,15 +40,15 @@ struct ThermostatRooms {
   static const char *icon_for(const std::string &k) {
     if (k == "bed") return "\U000F02E3";
     if (k == "sofa") return "\U000F04B9";
-    if (k == "stove") return "\U000F04D2";
+    if (k == "stove") return "\U000F04DE";
     if (k == "desk") return "\U000F1239";
     if (k == "shower") return "\U000F09A0";
     if (k == "table_chair") return "\U000F1061";
     if (k == "home") return "\U000F02DC";
-    if (k == "stairs") return "\U000F12CC";
+    if (k == "stairs") return "\U000F04CD";
     if (k == "washing") return "\U000F072A";
     if (k == "garage") return "\U000F06D9";
-    if (k == "baby") return "\U000F0718";
+    if (k == "baby") return "\U000F068F";
     if (k == "radiator") return "\U000F0438";
     if (k == "thermometer") return "\U000F050F";
     return "";
