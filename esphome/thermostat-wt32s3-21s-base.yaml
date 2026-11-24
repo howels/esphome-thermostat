@@ -569,6 +569,7 @@ font:
           "\U000F1474", # mdi:fan-speed-3
           "\U000F032A", # mdi:leaf
           "\U000F04B9", # mdi:sofa
+          "\U000F0A70", # mdi:silverware-fork-knife
           "\U000F14DE", # mdi:rocket-launch
           "\U000F0D80", # mdi:home-floor-1
           "\U000F0D81", # mdi:home-floor-2
@@ -628,6 +629,7 @@ font:
           "\U000F1473", # mdi:fan-speed-2
           "\U000F1474", # mdi:fan-speed-3
           "\U000F032A", # mdi:leaf
+          "\U000F0A70", # mdi:silverware-fork-knife
           "\U000F04B9", # mdi:sofa
           "\U000F14DE", # mdi:rocket-launch
           "\U000F0D80", # mdi:home-floor-1
@@ -689,6 +691,7 @@ font:
           "\U000F1474", # mdi:fan-speed-3
           "\U000F032A", # mdi:leaf
           "\U000F04B9", # mdi:sofa
+          "\U000F0A70", # mdi:silverware-fork-knife
           "\U000F14DE", # mdi:rocket-launch
           "\U000F0D80", # mdi:home-floor-1
           "\U000F0D81", # mdi:home-floor-2

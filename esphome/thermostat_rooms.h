@@ -41,6 +41,7 @@ struct ThermostatRooms {
     if (k == "bed") return "\U000F02E3";
     if (k == "sofa") return "\U000F04B9";
     if (k == "stove") return "\U000F04DE";
+    if (k == "silverware") return "\U000F0A70";
     if (k == "desk") return "\U000F1239";
     if (k == "shower") return "\U000F09A0";
     if (k == "table_chair") return "\U000F1061";

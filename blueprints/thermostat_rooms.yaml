@@ -88,7 +88,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
@@ -149,7 +149,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
@@ -208,7 +208,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
@@ -267,7 +267,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
@@ -326,7 +326,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
@@ -385,7 +385,7 @@ blueprint:
                 - { label: "Initial letter (default)", value: "" }
                 - { label: "Bed (Bedroom)", value: "bed" }
                 - { label: "Sofa (Living room)", value: "sofa" }
-                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Stove (Kitchen)", value: "silverware" }
                 - { label: "Desk (Study / Office)", value: "desk" }
                 - { label: "Shower (Bathroom)", value: "shower" }
                 - { label: "Table & chair (Dining)", value: "table_chair" }
