@@ -1,0 +1,2500 @@
+substitutions:
+  device_description: 'WT32S3-21S ZX2D10GE01R-V4848 rotary switch screen'
+  climate_entity: climate.central_heating
+  rooms_request_event: esphome.thermostat_rooms_request
+  room_set_event: esphome.thermostat_room_set
+  rooms_max_age: '180000'
+  page_anim: 200ms
+  page_settle: 260ms
+  backlight_timeout_default: '60'
+  backlight_fade: 5s
+
+# Logger must be at least debug (default)
+# disable UART logging
+logger:
+  level: DEBUG
+  baud_rate: 0
+
+preferences:
+  flash_write_interval: 30min
+
+# Enable Home Assistant API
+api:
+  reboot_timeout: 1h
+  # HA calls esphome.thermostat_wt32s3_21s_set_rooms with the room list.
+  actions:
+    - action: set_rooms
+      variables:
+        data: string
+      then:
+        - lambda: |-
+            thermostat_rooms.parse(data, millis());
+            if (id(sel_room) < 1 || id(sel_room) > thermostat_rooms.count) id(sel_room) = 1;
+            // Drop the optimistic target once HA reports the value we sent.
+            if (id(room_set_pending) && id(sel_room) <= thermostat_rooms.count) {
+              float t = thermostat_rooms.room[id(sel_room) - 1].target;
+              if (!std::isnan(t) && fabsf(t - id(room_set_target)) < 0.01f) id(room_set_pending) = false;
+            }
+            id(rooms_summary).publish_state(thermostat_rooms.summary());
+        - logger.log:
+            format: "rooms: %s"
+            args: [ 'thermostat_rooms.summary().c_str()' ]
+        - script.execute: refresh_rooms_ui
+    # HA calls esphome.thermostat_wt32s3_21s_set_weather with the outdoor conditions.
+    - action: set_weather
+      variables:
+        data: string
+      then:
+        - lambda: 'thermostat_weather.parse(data, millis());'
+        - logger.log:
+            format: "weather: %s %s %s"
+            args: [ 'thermostat_weather.condition.c_str()', 'thermostat_weather.temp_text().c_str()', 'thermostat_weather.forecast_line().c_str()' ]
+        - script.execute: refresh_weather_ui
+    # HA calls esphome.thermostat_wt32s3_21s_set_controller with the automation name/entity_id.
+    - action: set_controller
+      variables:
+        name: string
+      then:
+        - lambda: 'id(controller_automation).publish_state(name.empty() ? std::string("none") : std::string(name));'
+        - logger.log:
+            format: "controller: %s"
+            args: [ 'name.c_str()' ]
+  # Ask HA for the room list as soon as it can answer.
+  on_client_connected:
+    - homeassistant.event:
+        event: ${rooms_request_event}
+
+captive_portal:
+
+# Enable web server API
+web_server:
+  port: 80
+
+esphome:
+  name: ${hostname}
+  name_add_mac_suffix: False
+  friendly_name: ${friendly_name}
+  comment: ${device_description}
+  includes:
+    - thermostat_rooms.h
+    - thermostat_weather.h
+  on_boot:
+    - light.turn_on:
+        id: backlight
+        brightness: 0.7
+    # LVGL and the first page are up after a short delay; only then accept input.
+    - delay: 3s
+    - lambda: 'id(ui_ready) = true;'
+    - logger.log: "ui: ready"
+    - script.execute: ui_unlock
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    #version: 5.3.5
+    #platform_version: 6.8.1
+    #platform_version: https://github.com/pioarduino/platform-espressif32/releases/download/54.03.21-2/platform-espressif32.zip
+    #platform_version: 54.03.21-2
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_16MB: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+psram:
+  mode: octal
+  speed: 80MHz
+
+debug:
+  update_interval: 60s
+
+#<<: !include _common.yaml
+
+output:
+  ### DISPLAY BACKLIGHT
+  - platform: ledc
+    id: display_led
+    pin: 38
+    zero_means_zero: true
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: display_led
+    name: Backlight
+    icon: mdi:brightness-percent
+    default_transition_length: 500ms
+    restore_mode: ALWAYS_ON
+    # Input is only accepted while the backlight is on. A press or rotation that
+    # wakes the screen is consumed by ui_wake and never reaches a widget.
+    on_turn_on:
+      - logger.log: "backlight: on"
+      - script.execute: ui_unlock
+      - script.execute: backlight_idle
+      # Bring the RGB ring back if the idle timeout switched it off.
+      - if:
+          condition:
+            lambda: 'return id(rgb_was_on);'
+          then:
+            - lambda: 'id(rgb_was_on) = false;'
+            - light.turn_on: rgb_ring
+    on_turn_off:
+      - logger.log: "backlight: off"
+      - script.execute: ui_lock
+
+  ### RGB RING LIGHT
+  - platform: esp32_rmt_led_strip
+    name: RGB LED
+    id: rgb_ring
+    pin: 4
+    num_leds: 13
+    #rmt_channel: 0
+    channel_colors: GRB
+    chipset: WS2812
+
+switch:
+  ### VIBRATION MOTOR
+  - platform: gpio
+    id: vibration
+    name: Vibration Motor
+    icon: mdi:vibrate
+    internal: true
+    pin: 7
+
+  ### DISPLAY ANTI BURN-IN
+  - platform: template
+    name: Antiburn
+    id: switch_antiburn
+    icon: mdi:television-shimmer
+    optimistic: true
+    internal: true
+    turn_on_action:
+      - logger.log: "Starting Antiburn"
+      - light.turn_off: backlight
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+      - lvgl.pause:
+          show_snow: true
+    turn_off_action:
+      - logger.log: "Stopping Antiburn"
+      - if:
+          condition: lvgl.is_paused
+          then:
+            - lvgl.resume:
+            - lvgl.widget.redraw:
+            - delay: 1s
+            - lvgl.pause:
+      - light.turn_on: backlight
+
+number:
+  ### BACKLIGHT TIMEOUT
+  # Seconds of no press or rotation before the backlight turns off. 0 disables
+  # the timeout. The value survives reboots and is set from the device page in HA.
+  - platform: template
+    name: Backlight timeout
+    id: backlight_timeout
+    icon: mdi:timer-outline
+    entity_category: config
+    unit_of_measurement: s
+    mode: box
+    min_value: 0
+    max_value: 3600
+    step: 5
+    initial_value: ${backlight_timeout_default}
+    restore_value: true
+    optimistic: true
+    on_value:
+      - logger.log:
+          format: "backlight: timeout set to %.0f s"
+          args: [ 'x' ]
+      - script.execute: backlight_idle
+
+text:
+  ### ROOM TARGETS STORE
+  # Used by the HA blueprint to remember requested room targets across runs so
+  # continuous external-sensor offset tracking has no runaway.
+  - platform: template
+    name: Room targets
+    id: room_targets_store
+    icon: mdi:thermometer-lines
+    entity_category: config
+    mode: text
+    optimistic: true
+    restore_value: true
+
+time:
+  - platform: homeassistant
+    id: hass_time
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: update_menu_date_label
+      - hours: 2,3,4,5
+        minutes: 5
+        seconds: 0
+        then:
+          - switch.turn_on: switch_antiburn
+      - hours: 2,3,4,5
+        minutes: 35
+        seconds: 0
+        then:
+          - switch.turn_off: switch_antiburn
+
+binary_sensor:
+  ### CENTRE PUSH BUTTON
+  # LVGL reads this sensor as the encoder ENTER key. All UI actions come from
+  # LVGL widget events (on_short_click / on_long_press). The automations below
+  # only log and wake the screen.
+  - platform: gpio
+    name: Button
+    id: push_button
+    icon: mdi:circle-outline
+    internal: true
+    pin:
+      number: 3
+      mode: INPUT
+      inverted: true
+      ignore_strapping_warning: true
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - logger.log:
+          format: "button: press (page=%d ui_page=%d)"
+          args: [ 'id(cur_page)', 'id(ui_page)' ]
+      - script.execute: ui_wake
+    on_release:
+      - logger.log: "button: release"
+
+  - platform: status
+    name: Status
+
+button:
+- platform: restart
+  name: Restart
+  disabled_by_default: True
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    disabled_by_default: True
+
+  ### ROTARY ENCODER
+  - platform: rotary_encoder
+    name: Rotary Encoder
+    id: rotary
+    icon: mdi:cached
+    internal: true
+    pin_a:
+      number: 6
+      inverted: true
+      mode: INPUT
+    pin_b:
+      number: 5
+      inverted: true
+      mode: INPUT
+    on_value:
+      # Wake first: a rotation that wakes the screen only wakes it.
+      - script.execute: ui_wake
+      - if:
+          condition:
+            lambda: 'return id(ui_page) == 1 && id(hvac_mode).state == "off";'
+          then:
+            - script.execute: ui_heating_on
+    on_clockwise:
+      - if:
+          condition:
+            and:
+              - light.is_on: backlight
+              - lambda: 'return id(ui_page) == 1 && id(hvac_adjustable);'
+          then:
+            - script.execute:
+                id: nudge_set_temp
+                delta: 0.5
+      - if:
+          condition:
+            and:
+              - light.is_on: backlight
+              - lambda: 'return id(ui_page) == 7;'
+          then:
+            - script.execute:
+                id: nudge_room_temp
+                delta: 0.5
+    on_anticlockwise:
+      - if:
+          condition:
+            and:
+              - light.is_on: backlight
+              - lambda: 'return id(ui_page) == 1 && id(hvac_adjustable);'
+          then:
+            - script.execute:
+                id: nudge_set_temp
+                delta: -0.5
+      - if:
+          condition:
+            and:
+              - light.is_on: backlight
+              - lambda: 'return id(ui_page) == 7;'
+          then:
+            - script.execute:
+                id: nudge_room_temp
+                delta: -0.5
+
+  ### HASS - HVAC SET TEMP
+  - platform: homeassistant
+    entity_id: ${climate_entity}
+    id: set_temperature
+    attribute: temperature
+    internal: true
+    on_value:
+      # Drop the optimistic value once HA reports the value we sent.
+      - lambda: |-
+          if (id(set_temp_pending) && !std::isnan(x) && fabsf(x - id(set_temp_target)) < 0.01f) {
+            id(set_temp_pending) = false;
+          }
+      - script.execute: refresh_set_temp_ui
+
+  ### HASS - HVAC CURRENT TEMP
+  - platform: homeassistant
+    entity_id: ${climate_entity}
+    id: current_temperature
+    attribute: current_temperature
+    internal: true
+    on_value:
+      - lvgl.arc.update:
+          id: current_temp_arc
+          value: !lambda 'return std::isnan(x) ? 120 : (int) lroundf(x * 10);'
+      - script.execute: refresh_set_temp_ui
+      - lvgl.label.update:
+          id: current_temp_label
+          text:
+            format: "%.1f°C"
+            args: [ 'round(x * 10) / 10' ]
+
+  ### HASS - HVAC CURRENT HUMIDITY
+  - platform: homeassistant
+    entity_id: ${climate_entity}
+    id: current_humidity
+    attribute: current_humidity
+    internal: true
+
+text_sensor:
+  ### HASS - HVAC MODE
+  - platform: homeassistant
+    entity_id: ${climate_entity}
+    id: hvac_mode
+    internal: true
+    on_value:
+      - lambda: |-
+          id(hvac_adjustable) = (x == "heat" || x == "cool" || x == "heat_cool" || x == "dry");
+      - logger.log:
+          format: "hvac_mode: %s"
+          args: [ 'x.c_str()' ]
+      - lambda: |-
+          if (x.compare("off") == 0) {
+            id(set_mode_off).execute();
+          } else if (x.compare("heat") == 0) {
+            id(set_mode_heat).execute();
+          } else if (x.compare("cool") == 0) {
+            id(set_mode_cool).execute();
+          } else if (x.compare("heat_cool") == 0) {
+            id(set_mode_heat_cool).execute();
+          }
+
+  ### ROOMS (pushed by HA, see api: actions)
+  # Rooms the firmware currently holds. Shown on the device page.
+  - platform: template
+    name: Rooms
+    id: rooms_summary
+    icon: mdi:home-thermometer
+    entity_category: diagnostic
+
+  - platform: template
+    name: Controller automation
+    id: controller_automation
+    icon: mdi:robot-outline
+    entity_category: diagnostic
+
+  - platform: debug
+    reset_reason:
+      name: Reset Reason
+      disabled_by_default: True
+
+spi:
+  ### DISPLAY
+  clk_pin:
+    number: 47
+    allow_other_uses: true
+  mosi_pin:
+    number: 41
+    allow_other_uses: true
+display:
+  - platform: st7701s
+    id: screen
+    spi_mode: MODE0
+    data_rate: 10MHz
+    color_order: RGB
+    auto_clear_enabled: false
+    update_interval: never
+    dimensions:
+      width: 480
+      height: 480
+    cs_pin: 21
+    de_pin: 39
+    vsync_pin: 48
+    hsync_pin: 40
+    pclk_pin:
+      number: 45
+      ignore_strapping_warning: true
+    pclk_frequency: 15MHz
+    pclk_inverted: false
+    hsync_pulse_width: 10
+    hsync_back_porch:  10
+    hsync_front_porch: 10
+    vsync_pulse_width:  2
+    vsync_back_porch:  12
+    vsync_front_porch: 14
+    data_pins:
+      blue:
+        - number: 47                # LCD_D0  = b0
+          allow_other_uses: true
+        - number: 41                # LCD_D1  = b1
+          allow_other_uses: true
+        - 0                         # LCD_D2  = b2
+        - 42                        # LCD_D3  = b3
+        - 14                        # LCD_D4  = b4
+      green:
+        - 8                         # LCD_D5  = g0
+        - 13                        # LCD_D6  = g1
+        - 18                        # LCD_D7  = g2
+        - 12                        # LCD_D8  = g3
+        - 11                        # LCD_D9  = g4
+        - 17                        # LCD_D10 = g5
+      red:
+        - 10                        # LCD_D11 = r0
+        - 16                        # LCD_D12 = r1
+        - 9                         # LCD_D13 = r2
+        - 15                        # LCD_D14 = r3
+        - 46                        # LCD_D15 = r4
+    init_sequence:
+      # Reference: wireless-tag sample code: 
+      # https://github.com/wireless-tag-com/ZX2D10GE01R-V4848/blob/master/main/screen.c
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]    # CMD2_BKSEL (command bank select BK3, BK func enabled)
+      - [0xEF, 0x08]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10]    # CMD2_BKSEL (command bank select BK0, BK func disabled)
+      - [0xC0, 0x3B, 0x00]                      # Scan line
+      - [0xC1, 0x0B, 0x02]                      # VBP
+      - [0xC2, 0x07, 0x02]
+      - [0xCC, 0x10]
+      - [0xCD, 0x08]                            # RGB format | ?565??? 666??
+      - [0xB0, 0x00, 0x11, 0x16, 0x0e, 0x11, 0x06, 0x05, 0x09, 0x08, 0x21, 0x06, 0x13, 0x10, 0x29, 0x31, 0x18]   # IPS | 255 | 251 | 247 down | 239 | 231 | 203 | 175 | 147 | 108 | 80 | 52 | 24 | 16 | 8 down | 4 | 0
+      - [0xB1, 0x00, 0x11, 0x16, 0x0e, 0x11, 0x07, 0x05, 0x09, 0x09, 0x21, 0x05, 0x13, 0x11, 0x2a, 0x31, 0x18]   # IPS | 255 | 251 | 247 down | 239 | 231 | 203 | 175 | 147 | 108 | 80 | 52 | 24 | 16 | 8 down | 4 | 0
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x11]
+      - [0xB0, 0x6d]                            # VOP  3.5375+ *x 0.0125 | 5D
+      - [0xB1, 0x37]                            # VCOM amplitude setting
+      - [0xB2, 0x81]                            # VGH Voltage setting | 12V
+      - [0xB3, 0x80]
+      - [0xB5, 0x43]                            # VGL Voltage setting | -8.3V
+      - [0xB7, 0x85]
+      - [0xB8, 0x20]
+      - [0xC1, 0x78]
+      - [0xC2, 0x78]
+      - [0xD0, 0x88]
+      - [0xE0, 0x00, 0x00, 0x02]
+      - [0xE1, 0x03, 0xA0, 0x00, 0x00, 0x04, 0xA0, 0x00, 0x00, 0x00, 0x20, 0x20]
+      - [0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE3, 0x00, 0x00, 0x11, 0x00]
+      - [0xE4, 0x22, 0x00]
+      - [0xE5, 0x05, 0xEC, 0xA0, 0xA0, 0x07, 0xEE, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE6, 0x00, 0x00, 0x11, 0x00]
+      - [0xE7, 0x22, 0x00]
+      - [0xE8, 0x06, 0xED, 0xA0, 0xA0, 0x08, 0xEF, 0xA0, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xEB, 0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x00]
+      - [0xED, 0xFF, 0xFF, 0xFF, 0xBA, 0x0A, 0xBF, 0x45, 0xFF, 0xFF, 0x54, 0xFB, 0xA0, 0xAB, 0xFF, 0xFF, 0xFF]
+      - [0xEF, 0x10, 0x0D, 0x04, 0x08, 0x3F, 0x1F]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]    # CMD2_BKSEL (command bank select BK3, BK func enabled)
+      - [0xEF, 0x08]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]    # CMD2_BKSEL (command bank select BK0, BK func disabled)
+      - [0x36, 0x00]                            # MADCTL_CMD (already in esphome ST7701S::write_init_sequence_)
+      - [0x3A, 0x66]                            # COLMOD 55/50=16bit(RGB565); 66=18bit(RGB666); 77?????3AH?=24bit(RGB888)
+      # - [0x11]                                  # SLEEP_OUT (already in esphome)
+      # - delay 120ms
+      # - [0x29]                                  # DISPLAY_ON (already in esphome)
+      # - delay 20ms
+      #
+
+#<<: !include _neo-nesp_UI.yaml
+
+# neo-nesp UI
+
+packages:
+  colors: !include colors/HOMEASSISTANT
+
+font:
+  - file: 'gfonts://Roboto@400'
+    glyphs: ' 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ°.:/+-%–'
+    id: roboto_reg
+    size: 24
+    bpp: 4
+    extras:
+      # https://pictogrammers.github.io
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs: [
+          "\U000F050F", # mdi:thermometer
+          "\U000F02E3", # mdi:bed
+          "\U000F04D2", # mdi:stove
+          "\U000F1239", # mdi:desk
+          "\U000F09A0", # mdi:shower
+          "\U000F1061", # mdi:table-chair
+          "\U000F02DC", # mdi:home
+          "\U000F12CC", # mdi:stairs
+          "\U000F072A", # mdi:washing-machine
+          "\U000F06D9", # mdi:garage
+          "\U000F0718", # mdi:baby-carriage
+          "\U000F0438", # mdi:radiator
+          "\U000F058E", # mdi:water-percent
+          "\U000F0425", # mdi:power
+          "\U000F0238", # mdi:fire
+          "\U000F1A45", # mdi:heat-wave
+          "\U000F0717", # mdi:snowflake
+          "\U000F1A79", # mdi:sun-snowflake-variant
+          "\U000F0210", # mdi:fan
+          "\U000F171D", # mdi:fan-auto
+          "\U000F1472", # mdi:fan-speed-1
+          "\U000F1473", # mdi:fan-speed-2
+          "\U000F1474", # mdi:fan-speed-3
+          "\U000F032A", # mdi:leaf
+          "\U000F04B9", # mdi:sofa
+          "\U000F14DE", # mdi:rocket-launch
+          "\U000F0D80", # mdi:home-floor-1
+          "\U000F0D81", # mdi:home-floor-2
+          "\U000F004D", # mdi:arrow-left
+          "\U000F09DF", # mdi:circle-small
+          "\U000F0E03", # mdi:thermometer-chevron-up
+          "\U000F0E02", # mdi:thermometer-chevron-down
+          "\U000F0594", # mdi:weather-night (clear)
+          "\U000F0590", # mdi:weather-cloudy (cloudy)
+          "\U000F0898", # mdi:weather-hurricane (cyclone, tropical_cyclone)
+          "\U000F0F30", # mdi:weather-hazy (dust, dusty, haze, hazy)
+          "\U000F0591", # mdi:weather-fog (fog)
+          "\U000F12CB", # mdi:snowflake-melt (frost)
+          "\U000F0596", # mdi:weather-pouring (heavy_shower, heavy_showers, rain)
+          "\U000F0F33", # mdi:weather-partly-rainy (light_rain)
+                        # mdi:weather-light-showers (light_shower, light_showers)
+          "\U000F0599", # mdi:weather-sunny (mostly_sunny, sunny)
+          "\U000F0595", # mdi:weather-partly-cloudy (partly_cloudy)
+          "\U000F0597", # mdi:weather-rainy (shower, showers)
+          "\U000F0598", # mdi:weather-snowy (snow)
+          "\U000F0593", # mdi:weather-lightning
+          "\U000F067E", # mdi:weather-lightning-rainy (storm, storms)
+          "\U000F059D", # mdi:weather-windy (wind, windy)
+          "\U000F0592", # mdi:weather-hail
+          ]
+
+  - file: 'gfonts://Roboto@400'
+    glyphs: ' 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ°.:/+-%–'
+    id: roboto_lg
+    size: 32
+    bpp: 4
+    extras:
+      # https://pictogrammers.github.io
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs: [
+          "\U000F050F", # mdi:thermometer
+          "\U000F02E3", # mdi:bed
+          "\U000F04D2", # mdi:stove
+          "\U000F1239", # mdi:desk
+          "\U000F09A0", # mdi:shower
+          "\U000F1061", # mdi:table-chair
+          "\U000F02DC", # mdi:home
+          "\U000F12CC", # mdi:stairs
+          "\U000F072A", # mdi:washing-machine
+          "\U000F06D9", # mdi:garage
+          "\U000F0718", # mdi:baby-carriage
+          "\U000F0438", # mdi:radiator
+          "\U000F058E", # mdi:water-percent
+          "\U000F0425", # mdi:power
+          "\U000F0238", # mdi:fire
+          "\U000F1A45", # mdi:heat-wave
+          "\U000F0717", # mdi:snowflake
+          "\U000F1A79", # mdi:sun-snowflake-variant
+          "\U000F0210", # mdi:fan
+          "\U000F171D", # mdi:fan-auto
+          "\U000F1472", # mdi:fan-speed-1
+          "\U000F1473", # mdi:fan-speed-2
+          "\U000F1474", # mdi:fan-speed-3
+          "\U000F032A", # mdi:leaf
+          "\U000F04B9", # mdi:sofa
+          "\U000F14DE", # mdi:rocket-launch
+          "\U000F0D80", # mdi:home-floor-1
+          "\U000F0D81", # mdi:home-floor-2
+          "\U000F004D", # mdi:arrow-left
+          "\U000F09DF", # mdi:circle-small
+          "\U000F0E03", # mdi:thermometer-chevron-up
+          "\U000F0E02", # mdi:thermometer-chevron-down
+          "\U000F0594", # mdi:weather-night (clear)
+          "\U000F0590", # mdi:weather-cloudy (cloudy)
+          "\U000F0898", # mdi:weather-hurricane (cyclone, tropical_cyclone)
+          "\U000F0F30", # mdi:weather-hazy (dust, dusty, haze, hazy)
+          "\U000F0591", # mdi:weather-fog (fog)
+          "\U000F12CB", # mdi:snowflake-melt (frost)
+          "\U000F0596", # mdi:weather-pouring (heavy_shower, heavy_showers, rain)
+          "\U000F0F33", # mdi:weather-partly-rainy (light_rain)
+                        # mdi:weather-light-showers (light_shower, light_showers)
+          "\U000F0599", # mdi:weather-sunny (mostly_sunny, sunny)
+          "\U000F0595", # mdi:weather-partly-cloudy (partly_cloudy)
+          "\U000F0597", # mdi:weather-rainy (shower, showers)
+          "\U000F0598", # mdi:weather-snowy (snow)
+          "\U000F0593", # mdi:weather-lightning
+          "\U000F067E", # mdi:weather-lightning-rainy (storm, storms)
+          "\U000F059D", # mdi:weather-windy (wind, windy)
+          "\U000F0592", # mdi:weather-hail
+          ]
+
+  - file: 'gfonts://Roboto@400'
+    glyphs: ' 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ°.:/+-%–'
+    id: roboto_med
+    size: 48
+    bpp: 4
+    extras:
+      # https://pictogrammers.github.io
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs: [
+          "\U000F050F", # mdi:thermometer
+          "\U000F02E3", # mdi:bed
+          "\U000F04D2", # mdi:stove
+          "\U000F1239", # mdi:desk
+          "\U000F09A0", # mdi:shower
+          "\U000F1061", # mdi:table-chair
+          "\U000F02DC", # mdi:home
+          "\U000F12CC", # mdi:stairs
+          "\U000F072A", # mdi:washing-machine
+          "\U000F06D9", # mdi:garage
+          "\U000F0718", # mdi:baby-carriage
+          "\U000F0438", # mdi:radiator
+          "\U000F058E", # mdi:water-percent
+          "\U000F0425", # mdi:power
+          "\U000F0238", # mdi:fire
+          "\U000F1A45", # mdi:heat-wave
+          "\U000F0717", # mdi:snowflake
+          "\U000F1A79", # mdi:sun-snowflake-variant
+          "\U000F0210", # mdi:fan
+          "\U000F171D", # mdi:fan-auto
+          "\U000F1472", # mdi:fan-speed-1
+          "\U000F1473", # mdi:fan-speed-2
+          "\U000F1474", # mdi:fan-speed-3
+          "\U000F032A", # mdi:leaf
+          "\U000F04B9", # mdi:sofa
+          "\U000F14DE", # mdi:rocket-launch
+          "\U000F0D80", # mdi:home-floor-1
+          "\U000F0D81", # mdi:home-floor-2
+          "\U000F004D", # mdi:arrow-left
+          "\U000F09DF", # mdi:circle-small
+          "\U000F0E03", # mdi:thermometer-chevron-up
+          "\U000F0E02", # mdi:thermometer-chevron-down
+          "\U000F0594", # mdi:weather-night (clear)
+          "\U000F0590", # mdi:weather-cloudy (cloudy)
+          "\U000F0898", # mdi:weather-hurricane (cyclone, tropical_cyclone)
+          "\U000F0F30", # mdi:weather-hazy (dust, dusty, haze, hazy)
+          "\U000F0591", # mdi:weather-fog (fog)
+          "\U000F12CB", # mdi:snowflake-melt (frost)
+          "\U000F0596", # mdi:weather-pouring (heavy_shower, heavy_showers, rain)
+          "\U000F0F33", # mdi:weather-partly-rainy (light_rain)
+                        # mdi:weather-light-showers (light_shower, light_showers)
+          "\U000F0599", # mdi:weather-sunny (mostly_sunny, sunny)
+          "\U000F0595", # mdi:weather-partly-cloudy (partly_cloudy)
+          "\U000F0597", # mdi:weather-rainy (shower, showers)
+          "\U000F0598", # mdi:weather-snowy (snow)
+          "\U000F0593", # mdi:weather-lightning
+          "\U000F067E", # mdi:weather-lightning-rainy (storm, storms)
+          "\U000F059D", # mdi:weather-windy (wind, windy)
+          "\U000F0592", # mdi:weather-hail
+          ]
+
+  - file: 'gfonts://Roboto@400'
+    glyphs: ' -0123456789.°C'
+    id: roboto_huge
+    size: 90
+    bpp: 4
+    extras:
+      # https://pictogrammers.github.io
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs: [
+          "\U000F171D", # mdi:fan-auto
+          "\U000F1472", # mdi:fan-speed-1
+          "\U000F1473", # mdi:fan-speed-2
+          "\U000F1474", # mdi:fan-speed-3
+          "\U000F0594", # mdi:weather-night (clear)
+          "\U000F0590", # mdi:weather-cloudy (cloudy)
+          "\U000F0898", # mdi:weather-hurricane (cyclone, tropical_cyclone)
+          "\U000F0F30", # mdi:weather-hazy (dust, dusty, haze, hazy)
+          "\U000F0591", # mdi:weather-fog (fog)
+          "\U000F12CB", # mdi:snowflake-melt (frost)
+          "\U000F0596", # mdi:weather-pouring (heavy_shower, heavy_showers, rain)
+          "\U000F0F33", # mdi:weather-partly-rainy (light_rain)
+                        # mdi:weather-light-showers (light_shower, light_showers)
+          "\U000F0599", # mdi:weather-sunny (mostly_sunny, sunny)
+          "\U000F0595", # mdi:weather-partly-cloudy (partly_cloudy)
+          "\U000F0597", # mdi:weather-rainy (shower, showers)
+          "\U000F0598", # mdi:weather-snowy (snow)
+          "\U000F0593", # mdi:weather-lightning
+          "\U000F067E", # mdi:weather-lightning-rainy (storm, storms)
+          "\U000F059D", # mdi:weather-windy (wind, windy)
+          "\U000F0592", # mdi:weather-hail
+          ]
+
+globals:
+  # Page shown or being shown: 1 main, 2 menu, 3 mode, 6 rooms, 7 room.
+  - id: cur_page
+    type: int
+    initial_value: '1'
+  # Page that currently accepts input. 0 while locked (transition, asleep, boot).
+  - id: ui_page
+    type: int
+    initial_value: '0'
+  - id: ui_ready
+    type: bool
+    initial_value: 'false'
+  # True from the start of the idle fade-out until the backlight is fully off.
+  - id: bl_fading
+    type: bool
+    initial_value: 'false'
+  # True if the RGB ring was on when the idle timeout switched it off.
+  - id: rgb_was_on
+    type: bool
+    initial_value: 'false'
+  # True when the HVAC mode takes a target temperature (heat, cool, heat_cool, dry).
+  - id: hvac_adjustable
+    type: bool
+    initial_value: 'false'
+  # Target temperature set locally and not yet confirmed by HA.
+  - id: set_temp_target
+    type: float
+    initial_value: '20.0'
+  - id: set_temp_pending
+    type: bool
+    initial_value: 'false'
+  # Menu ring focus: 0 Back, 1 Mode, 2..7 room 1..6.
+  - id: menu_focus
+    type: int
+    initial_value: '0'
+  # Rooms page focus: 0 = Back, 1..6 = room button.
+  - id: rooms_focus
+    type: int
+    initial_value: '0'
+  # Room shown on the room page (1..6).
+  - id: sel_room
+    type: int
+    initial_value: '1'
+  # Room target set locally and not yet confirmed by HA.
+  - id: room_set_target
+    type: float
+    initial_value: '20.0'
+  - id: room_set_pending
+    type: bool
+    initial_value: 'false'
+  # Last valid target temperature drawn on screen (used when HA reports NaN).
+  - id: shown_set_temp
+    type: float
+    initial_value: '20.0'
+
+lvgl:
+  encoders:
+    - enter_button: push_button
+      sensor: rotary
+      long_press_time: 600ms
+  bg_color: black
+  scrollbar_mode: "OFF"
+  default_font: roboto_reg
+  text_color: white
+  style_definitions:
+    - id: style_menu_button
+      align: CENTER
+      bg_opa: TRANSP
+      shadow_opa: TRANSP
+      height: 50
+      width: 50
+      radius: 50%
+    - id: style_menu_button_label
+      align: CENTER
+      y: 3
+      text_font: roboto_med
+
+  pages:
+    ### GUI - THERMOSTAT
+    - id: main_page
+      widgets:
+        - arc:
+            id: arc_bg
+            height: 468
+            width: 468
+            align: CENTER
+            arc_color: graylight
+            arc_opa: COVER
+            arc_width: 2
+            arc_rounded: false
+        - arc:
+            id: current_temp_arc
+            adjustable: true
+            state:
+              disabled: true
+            min_value: 120    # 12°C (* 10 because decimals not supported)
+            max_value: 340    # 34°C
+            height: 468
+            width: 468
+            align: CENTER
+            arc_color: graylight
+            arc_opa: COVER
+            arc_width: 2
+            arc_rounded: false
+            indicator:
+              arc_color: graylight
+              arc_opa: COVER
+              arc_width: 2
+              arc_rounded: false
+            knob:
+              bg_color: white
+            value: 230
+        - meter:
+            id: meter_ticks
+            height: 480
+            width: 480
+            align: CENTER
+            bg_opa: TRANSP
+            border_width: 0
+            scales:
+              range_from: 120   # 12°C (* 10 because decimals not supported)
+              range_to: 340     # 34°C
+              ticks:
+                count: 89
+                length: 37
+                width: 3
+                color: graylight
+              indicators:
+                - line:
+                    id: set_temp_needle
+                    color: white
+                    width: 8
+                    length: -10
+                    value: 230
+                - arc:
+                    id: diff_temp_arc
+                    start_value: 120
+                    end_value: 230
+                    color: white
+                    width: 2
+        - obj:
+            id: mode_bg
+            height: 350
+            width: 350
+            radius: 175
+            align: CENTER
+            border_width: 0
+            bg_color: black
+        - roller:
+            id: set_temp_roller
+            state:
+              disabled: true
+            align: CENTER
+            anim_duration: 500ms
+            text_font: roboto_med
+            text_opa: TRANSP
+            bg_opa: TRANSP
+            border_width: 0
+            text_line_space: 30
+            visible_row_count: 2
+            selected:
+              text_font: roboto_huge
+              text_opa: COVER
+              bg_opa: TRANSP
+              border_width: 0
+            options:
+              - 16.0
+              - 16.5
+              - 17.0
+              - 17.5
+              - 18.0
+              - 18.5
+              - 19.0 
+              - 19.5
+              - 20.0
+              - 20.5
+              - 21.0
+              - 21.5
+              - 22.0
+              - 22.5
+              - 23.0
+              - 23.5
+              - 24.0
+              - 24.5
+              - 25.0
+              - 25.5
+              - 26.0
+              - 26.5
+              - 27.0
+              - 27.5
+              - 28.0
+              - 28.5
+              - 29.0
+              - 29.5
+              - 30.0
+            selected_index: 14
+        - label:
+            id: celsius_label
+            align: CENTER
+            x: 100
+            y: -43
+            text: "°C"
+        - label:
+            id: mode_label
+            align: CENTER
+            y: -100
+            text: "NESP"
+        - label:
+            id: weather_icon_label
+            hidden: true
+            align: CENTER
+            y: -100
+            text_font: roboto_huge
+            text: " "
+        - label:
+            id: weather_temp_label
+            hidden: true
+            align: CENTER
+            text_font: roboto_huge
+            text: " "
+        - label:
+            id: weather_forecast_label
+            hidden: true
+            align: CENTER
+            y: 70 
+            text: " "
+        - label:
+            id: weather_feels_like_label
+            hidden: true
+            align: CENTER
+            y: 130
+            text: " "
+        - label:
+            id: current_temp_label
+            align: CENTER
+            y: 84
+            text: " "
+        - label:
+            id: main_rooms_label
+            align: CENTER
+            y: 138
+            width: 300
+            text_align: CENTER
+            text_color: graylight
+            text_line_space: 4
+            text: " "
+        # Invisible full-screen button. It is the only enabled widget on the main
+        # page, so it always holds encoder focus there. A click opens the menu.
+        - button:
+            id: main_click_button
+            state:
+              disabled: true
+            x: 0
+            y: 0
+            width: 480
+            height: 480
+            align: CENTER
+            radius: 0
+            bg_opa: TRANSP
+            border_width: 0
+            shadow_opa: TRANSP
+            outline_width: 0
+            on_short_click:
+              - logger.log: "ui: short_click main_click_button"
+              - script.execute: goto_menu_page
+            on_long_press:
+              - logger.log: "ui: long_press main_click_button"
+              - script.execute: goto_rooms_page
+
+    ### GUI - MENU
+    # Ring, clockwise from the top (45 deg steps): Back, Mode, then up to 6 rooms.
+    # Explicit heights on the centred labels keep long_mode: DOT to one line so
+    # lines never wrap into each other.
+    - id: menu_page
+      widgets:
+        - label:
+            id: menu_title_label
+            align: CENTER
+            y: -58
+            width: 260
+            height: 54
+            text_font: roboto_med
+            text_align: CENTER
+            long_mode: DOT
+            text: " "
+        - label:
+            id: menu_detail_label
+            align: CENTER
+            y: 4
+            width: 280
+            height: 38
+            text_font: roboto_lg
+            text_align: CENTER
+            long_mode: DOT
+            text: " "
+        - label:
+            id: menu_extra_label
+            align: CENTER
+            y: 54
+            width: 260
+            height: 38
+            text_font: roboto_lg
+            text_align: CENTER
+            text_color: graylight
+            long_mode: DOT
+            text: " "
+        - button:
+            id: menu_back_button
+            state:
+              disabled: true
+            x: 0
+            y: -196
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F004D"
+            on_focus:
+              - lambda: 'id(menu_focus) = 0;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_back_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_back_button"
+              - script.execute: goto_main_page
+        - button:
+            id: menu_mode_button
+            state:
+              disabled: true
+            x: 139
+            y: -139
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_mode_button_label
+                  styles: style_menu_button_label
+                  text: "\U000F0238"
+            on_focus:
+              - lambda: 'id(menu_focus) = 1;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_mode_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_mode_button"
+              - script.execute: goto_mode_page
+        - button:
+            id: menu_room_1_button
+            state:
+              disabled: true
+            x: 196
+            y: 0
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_1_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 2;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_1_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_1_button"
+              - lambda: |-
+                  id(sel_room) = 1;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: menu_room_2_button
+            state:
+              disabled: true
+            x: 139
+            y: 139
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_2_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 3;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_2_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_2_button"
+              - lambda: |-
+                  id(sel_room) = 2;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: menu_room_3_button
+            state:
+              disabled: true
+            x: 0
+            y: 196
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_3_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 4;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_3_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_3_button"
+              - lambda: |-
+                  id(sel_room) = 3;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: menu_room_4_button
+            state:
+              disabled: true
+            x: -139
+            y: 139
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_4_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 5;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_4_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_4_button"
+              - lambda: |-
+                  id(sel_room) = 4;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: menu_room_5_button
+            state:
+              disabled: true
+            x: -196
+            y: 0
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_5_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 6;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_5_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_5_button"
+              - lambda: |-
+                  id(sel_room) = 5;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: menu_room_6_button
+            state:
+              disabled: true
+            x: -139
+            y: -139
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: menu_room_6_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(menu_focus) = 7;'
+              - script.execute: refresh_menu_centre
+            on_long_press:
+              - logger.log: "ui: long_press menu_room_6_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click menu_room_6_button"
+              - lambda: |-
+                  id(sel_room) = 6;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+
+    ### GUI - MODE SELECT
+    - id: mode_page
+      widgets:
+        - label:
+            id: selected_mode_label
+            align: CENTER
+            y: 0
+            width: 270
+            text_font: roboto_med
+            text_align: CENTER
+            text: "Back"
+        - button:
+            id: mode_back_button
+            state:
+              disabled: true
+            x: 0
+            y: -196
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F004D"
+            on_focus:
+              - lvgl.label.update:
+                  id: selected_mode_label
+                  text: "Back"
+            on_long_press:
+              - logger.log: "ui: long_press mode_back_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click mode_back_button"
+              - script.execute: goto_menu_page
+        - button:
+            id: mode_off_button
+            state:
+              disabled: true
+            x: 186
+            y: -61
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F0425"
+            on_focus:
+              - lvgl.label.update:
+                  id: selected_mode_label
+                  text: "Off"
+            on_long_press:
+              - logger.log: "ui: long_press mode_off_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click mode_off_button"
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: ${climate_entity}
+                    hvac_mode: "off"
+              - script.execute: goto_main_page
+        - button:
+            id: mode_heat_button
+            state:
+              disabled: true
+            x: 115
+            y: 159
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F0238"
+            on_focus:
+              - lvgl.label.update:
+                  id: selected_mode_label
+                  text: "Heat\nonly"
+            on_long_press:
+              - logger.log: "ui: long_press mode_heat_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click mode_heat_button"
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: ${climate_entity}
+                    hvac_mode: "heat"
+              - script.execute: goto_main_page
+        - button:
+            id: mode_cool_button
+            state:
+              disabled: true
+            x: -115
+            y: 159
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F0717"
+            on_focus:
+              - lvgl.label.update:
+                  id: selected_mode_label
+                  text: "Cool\nonly"
+            on_long_press:
+              - logger.log: "ui: long_press mode_cool_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click mode_cool_button"
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: ${climate_entity}
+                    hvac_mode: "cool"
+              - script.execute: goto_main_page
+        - button:
+            id: mode_heat_cool_button
+            state:
+              disabled: true
+            x: -186
+            y: -61
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F1A79"
+            on_focus:
+              - lvgl.label.update:
+                  id: selected_mode_label
+                  text: "Heat or\ncool"
+            on_long_press:
+              - logger.log: "ui: long_press mode_heat_cool_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click mode_heat_cool_button"
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: ${climate_entity}
+                    hvac_mode: "heat_cool"
+              - script.execute: goto_main_page
+
+    ### GUI - ROOM SELECT
+    - id: rooms_page
+      widgets:
+        # Centre readout for the focused button. Back shows a summary and the
+        # outdoor weather; a room shows its temperatures and action.
+        - label:
+            id: rooms_title_label
+            align: CENTER
+            y: -66
+            width: 260
+            height: 54
+            text_font: roboto_med
+            text_align: CENTER
+            long_mode: DOT
+            text: " "
+        - label:
+            id: rooms_sub_label
+            align: CENTER
+            y: -8
+            width: 280
+            height: 38
+            text_font: roboto_lg
+            text_align: CENTER
+            long_mode: DOT
+            text: " "
+        - label:
+            id: rooms_detail_label
+            align: CENTER
+            y: 38
+            width: 260
+            height: 38
+            text_font: roboto_lg
+            text_align: CENTER
+            long_mode: DOT
+            text: " "
+        - label:
+            id: rooms_weather_label
+            align: CENTER
+            y: 88
+            width: 240
+            height: 30
+            text_font: roboto_reg
+            text_align: CENTER
+            text_color: graylight
+            long_mode: DOT
+            text: " "
+        - button:
+            id: rooms_back_button
+            state:
+              disabled: true
+            x: 0
+            y: -210
+            styles: style_menu_button
+            widgets:
+              - label:
+                  styles: style_menu_button_label
+                  text: "\U000F004D"
+            on_focus:
+              - lambda: 'id(rooms_focus) = 0;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press rooms_back_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click rooms_back_button"
+              - script.execute: goto_menu_page
+        - button:
+            id: room_1_button
+            state:
+              disabled: true
+            x: 105
+            y: -182
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_1_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 1;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_1_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_1_button"
+              - lambda: |-
+                  id(sel_room) = 1;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: room_2_button
+            state:
+              disabled: true
+            x: 182
+            y: -105
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_2_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 2;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_2_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_2_button"
+              - lambda: |-
+                  id(sel_room) = 2;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: room_3_button
+            state:
+              disabled: true
+            x: 210
+            y: 0
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_3_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 3;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_3_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_3_button"
+              - lambda: |-
+                  id(sel_room) = 3;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: room_4_button
+            state:
+              disabled: true
+            x: 182
+            y: 105
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_4_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 4;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_4_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_4_button"
+              - lambda: |-
+                  id(sel_room) = 4;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: room_5_button
+            state:
+              disabled: true
+            x: 105
+            y: 182
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_5_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 5;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_5_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_5_button"
+              - lambda: |-
+                  id(sel_room) = 5;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+        - button:
+            id: room_6_button
+            state:
+              disabled: true
+            x: 0
+            y: 210
+            styles: style_menu_button
+            widgets:
+              - label:
+                  id: room_6_button_label
+                  styles: style_menu_button_label
+                  text: " "
+            on_focus:
+              - lambda: 'id(rooms_focus) = 6;'
+              - script.execute: refresh_rooms_ui
+            on_long_press:
+              - logger.log: "ui: long_press room_6_button"
+              - script.execute: goto_main_page
+            on_short_click:
+              - logger.log: "ui: short_click room_6_button"
+              - lambda: |-
+                  id(sel_room) = 6;
+                  id(room_set_pending) = false;
+              - script.execute: goto_room_page
+
+    ### GUI - ROOM TEMPERATURE
+    # Rotate to change the room target. Click returns to the room list.
+    - id: room_page
+      widgets:
+        - label:
+            id: room_name_label
+            align: CENTER
+            y: -120
+            text_font: roboto_med
+            text: " "
+        - label:
+            id: room_temp_label
+            align: CENTER
+            y: -60
+            text: " "
+        - label:
+            id: room_target_label
+            align: CENTER
+            y: 20
+            text_font: roboto_huge
+            text: " "
+        - label:
+            id: room_action_label
+            align: CENTER
+            y: 110
+            text: " "
+        - label:
+            id: room_outside_label
+            align: CENTER
+            y: 175
+            text_align: CENTER
+            text_color: graylight
+            text: " "
+        - button:
+            id: room_click_button
+            state:
+              disabled: true
+            x: 0
+            y: 0
+            width: 480
+            height: 480
+            align: CENTER
+            radius: 0
+            bg_opa: TRANSP
+            border_width: 0
+            shadow_opa: TRANSP
+            outline_width: 0
+            on_short_click:
+              - logger.log: "ui: short_click room_click_button"
+              - script.execute: goto_rooms_page
+            on_long_press:
+              - logger.log: "ui: long_press room_click_button"
+              - script.execute: goto_main_page
+
+interval:
+  # Drop the room list if HA has not sent one for rooms_max_age.
+  - interval: 30s
+    then:
+      - lambda: |-
+          if (thermostat_rooms.expire(millis(), ${rooms_max_age})) {
+            id(rooms_summary).publish_state(thermostat_rooms.summary());
+            id(controller_automation).publish_state("none");
+            ESP_LOGW("rooms", "room list expired, no update from Home Assistant");
+          }
+      - script.execute: refresh_rooms_ui
+      - lambda: |-
+          if (thermostat_weather.expire(millis(), ${rooms_max_age}))
+            ESP_LOGW("weather", "weather expired, no update from Home Assistant");
+      - script.execute: refresh_weather_ui
+
+script:
+  - id: vibrate
+    parameters:
+      length_ms: int
+    then:
+      # XXX doesn't delay properly for short lengths (10-100ms)
+      - switch.turn_on: vibration
+      - delay: !lambda return length_ms;
+      - switch.turn_off: vibration
+
+  # --- UI input state machine ------------------------------------------------
+  # Every interactive widget is disabled by default. LVGL sends no event to a
+  # disabled widget, so a locked UI ignores presses and releases.
+  #   ui_lock    disable all widgets; ui_page = 0
+  #   ui_unlock  wait for the button to be released, then enable the widgets of
+  #              cur_page and focus the safe one (ui_page = cur_page)
+  # Widgets are never enabled while the button is down, so a press and its
+  # release always reach the same widget.
+  - id: ui_lock
+    then:
+      - lambda: 'id(ui_page) = 0;'
+      - lvgl.widget.disable:
+          - main_click_button
+          - menu_back_button
+          - menu_mode_button
+          - menu_room_1_button
+          - menu_room_2_button
+          - menu_room_3_button
+          - menu_room_4_button
+          - menu_room_5_button
+          - menu_room_6_button
+          - mode_back_button
+          - mode_off_button
+          - mode_heat_button
+          - mode_cool_button
+          - mode_heat_cool_button
+          - rooms_back_button
+          - room_1_button
+          - room_2_button
+          - room_3_button
+          - room_4_button
+          - room_5_button
+          - room_6_button
+          - room_click_button
+      - logger.log:
+          format: "ui: locked (cur_page=%d)"
+          args: [ 'id(cur_page)' ]
+
+  - id: ui_unlock
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ui_ready);'
+          then:
+            - wait_until:
+                condition:
+                  binary_sensor.is_off: push_button
+                timeout: 2s
+            - delay: 50ms
+            - if:
+                condition:
+                  and:
+                    - light.is_on: backlight
+                    - not:
+                        lvgl.is_paused:
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(cur_page) == 1;'
+                      then:
+                        - lvgl.widget.enable: main_click_button
+                        - lvgl.widget.focus: main_click_button
+                  - if:
+                      condition:
+                        lambda: 'return id(cur_page) == 2;'
+                      then:
+                        - lvgl.widget.enable:
+                            - menu_back_button
+                            - menu_mode_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 1;'
+                            then:
+                              - lvgl.widget.enable: menu_room_1_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 2;'
+                            then:
+                              - lvgl.widget.enable: menu_room_2_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 3;'
+                            then:
+                              - lvgl.widget.enable: menu_room_3_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 4;'
+                            then:
+                              - lvgl.widget.enable: menu_room_4_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 5;'
+                            then:
+                              - lvgl.widget.enable: menu_room_5_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 6;'
+                            then:
+                              - lvgl.widget.enable: menu_room_6_button
+                        # Back is the safe default: a second click leaves the menu.
+                        - lvgl.widget.focus: menu_back_button
+                  - if:
+                      condition:
+                        lambda: 'return id(cur_page) == 3;'
+                      then:
+                        - lvgl.widget.enable:
+                            - mode_back_button
+                            - mode_off_button
+                            - mode_heat_button
+                            - mode_cool_button
+                            - mode_heat_cool_button
+                        - lvgl.widget.focus: mode_back_button
+                  - if:
+                      condition:
+                        lambda: 'return id(cur_page) == 6;'
+                      then:
+                        - lvgl.widget.enable: rooms_back_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 1;'
+                            then:
+                              - lvgl.widget.enable: room_1_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 2;'
+                            then:
+                              - lvgl.widget.enable: room_2_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 3;'
+                            then:
+                              - lvgl.widget.enable: room_3_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 4;'
+                            then:
+                              - lvgl.widget.enable: room_4_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 5;'
+                            then:
+                              - lvgl.widget.enable: room_5_button
+                        - if:
+                            condition:
+                              lambda: 'return thermostat_rooms.count >= 6;'
+                            then:
+                              - lvgl.widget.enable: room_6_button
+                        - lvgl.widget.focus: rooms_back_button
+                  - if:
+                      condition:
+                        lambda: 'return id(cur_page) == 7;'
+                      then:
+                        - lvgl.widget.enable: room_click_button
+                        - lvgl.widget.focus: room_click_button
+                  - lambda: 'id(ui_page) = id(cur_page);'
+                  - logger.log:
+                      format: "ui: unlocked (ui_page=%d)"
+                      args: [ 'id(ui_page)' ]
+
+  # Called on every press and rotation. If the screen is off (or LVGL is paused
+  # for antiburn) the input only wakes it; the UI stays locked until the button
+  # is released.
+  - id: ui_wake
+    mode: restart
+    then:
+      - if:
+          condition:
+            or:
+              - light.is_off: backlight
+              - lvgl.is_paused:
+              - lambda: 'return id(bl_fading);'
+          then:
+            - logger.log: "ui: input while asleep, waking (input consumed)"
+            - script.execute: ui_lock
+            - if:
+                condition: lvgl.is_paused
+                then:
+                  - lvgl.resume:
+                  - lvgl.widget.redraw:
+            - light.turn_on: backlight
+            - script.execute: ui_unlock
+      # Every press and rotation restarts the idle timer, awake or not.
+      - script.execute: backlight_idle
+
+  # Fades the backlight and the RGB ring out after backlight_timeout seconds
+  # without input. Restarts on every press, rotation, backlight-on event and
+  # timeout change, which also cancels a fade in progress. Input during the fade
+  # is treated as input while asleep (see ui_wake). A timeout of 0 disables it.
+  - id: backlight_idle
+    mode: restart
+    then:
+      - lambda: 'id(bl_fading) = false;'
+      - if:
+          # No light.is_on check: during the fade-in the current value can still
+          # read as off. Turning off an already-off light does nothing.
+          condition:
+            lambda: 'return id(backlight_timeout).state > 0;'
+          then:
+            - delay: !lambda 'return (uint32_t) (id(backlight_timeout).state * 1000.0f);'
+            - logger.log: "backlight: idle timeout, fading out"
+            - lambda: |-
+                id(bl_fading) = true;
+                if (id(rgb_ring).remote_values.is_on()) id(rgb_was_on) = true;
+            - light.turn_off:
+                id: backlight
+                transition_length: ${backlight_fade}
+            - light.turn_off:
+                id: rgb_ring
+                transition_length: ${backlight_fade}
+            - delay: ${backlight_fade}
+            - lambda: 'id(bl_fading) = false;'
+
+  # Navigate with a short animation. The UI is locked for the transition and
+  # unlocked page_settle later, once the button is up.
+  - id: goto_main_page
+    mode: restart
+    then:
+      - lambda: 'id(cur_page) = 1;'
+      - script.execute: ui_lock
+      - lvgl.page.show:
+          id: main_page
+          animation: FADE_OUT
+          time: ${page_anim}
+      - delay: ${page_settle}
+      - script.execute: ui_unlock
+  - id: goto_menu_page
+    mode: restart
+    then:
+      - lambda: 'id(cur_page) = 2;'
+      - script.execute: ui_lock
+      - lvgl.page.show:
+          id: menu_page
+          animation: FADE_IN
+          time: ${page_anim}
+      - delay: ${page_settle}
+      - script.execute: ui_unlock
+  - id: goto_mode_page
+    mode: restart
+    then:
+      - lambda: 'id(cur_page) = 3;'
+      - script.execute: ui_lock
+      - lvgl.page.show:
+          id: mode_page
+          animation: FADE_IN
+          time: ${page_anim}
+      - delay: ${page_settle}
+      - script.execute: ui_unlock
+  - id: goto_rooms_page
+    mode: restart
+    then:
+      - lambda: 'id(cur_page) = 6;'
+      - script.execute: ui_lock
+      - homeassistant.event:
+          event: ${rooms_request_event}
+      - script.execute: refresh_rooms_ui
+      - lvgl.page.show:
+          id: rooms_page
+          animation: FADE_IN
+          time: ${page_anim}
+      - delay: ${page_settle}
+      - script.execute: ui_unlock
+  - id: goto_room_page
+    mode: restart
+    then:
+      - lambda: 'id(cur_page) = 7;'
+      - script.execute: ui_lock
+      - script.execute: refresh_rooms_ui
+      - lvgl.page.show:
+          id: room_page
+          animation: FADE_IN
+          time: ${page_anim}
+      - delay: ${page_settle}
+      - script.execute: ui_unlock
+
+  # --- rooms -------------------------------------------------------------------
+  # thermostat_rooms (thermostat_rooms.h) holds the list from HA. Button
+  # initials, the label beside the ring and the room page all redraw from it.
+  # Buttons beyond the number of rooms draw nothing and stay disabled.
+  - id: refresh_rooms_ui
+    then:
+      - lvgl.label.update:
+          id: room_1_button_label
+          text: !lambda 'return thermostat_rooms.button_label(0);'
+      - lvgl.widget.update:
+          id: room_1_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 1) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[0].action));
+      - lvgl.label.update:
+          id: menu_room_1_label
+          text: !lambda 'return thermostat_rooms.button_label(0);'
+      - lvgl.widget.update:
+          id: menu_room_1_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 1) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[0].action));
+      - lvgl.label.update:
+          id: room_2_button_label
+          text: !lambda 'return thermostat_rooms.button_label(1);'
+      - lvgl.widget.update:
+          id: room_2_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 2) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[1].action));
+      - lvgl.label.update:
+          id: menu_room_2_label
+          text: !lambda 'return thermostat_rooms.button_label(1);'
+      - lvgl.widget.update:
+          id: menu_room_2_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 2) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[1].action));
+      - lvgl.label.update:
+          id: room_3_button_label
+          text: !lambda 'return thermostat_rooms.button_label(2);'
+      - lvgl.widget.update:
+          id: room_3_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 3) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[2].action));
+      - lvgl.label.update:
+          id: menu_room_3_label
+          text: !lambda 'return thermostat_rooms.button_label(2);'
+      - lvgl.widget.update:
+          id: menu_room_3_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 3) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[2].action));
+      - lvgl.label.update:
+          id: room_4_button_label
+          text: !lambda 'return thermostat_rooms.button_label(3);'
+      - lvgl.widget.update:
+          id: room_4_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 4) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[3].action));
+      - lvgl.label.update:
+          id: menu_room_4_label
+          text: !lambda 'return thermostat_rooms.button_label(3);'
+      - lvgl.widget.update:
+          id: menu_room_4_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 4) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[3].action));
+      - lvgl.label.update:
+          id: room_5_button_label
+          text: !lambda 'return thermostat_rooms.button_label(4);'
+      - lvgl.widget.update:
+          id: room_5_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 5) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[4].action));
+      - lvgl.label.update:
+          id: menu_room_5_label
+          text: !lambda 'return thermostat_rooms.button_label(4);'
+      - lvgl.widget.update:
+          id: menu_room_5_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 5) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[4].action));
+      - lvgl.label.update:
+          id: room_6_button_label
+          text: !lambda 'return thermostat_rooms.button_label(5);'
+      - lvgl.widget.update:
+          id: room_6_button_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 6) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[5].action));
+      - lvgl.label.update:
+          id: menu_room_6_label
+          text: !lambda 'return thermostat_rooms.button_label(5);'
+      - lvgl.widget.update:
+          id: menu_room_6_label
+          text_color: !lambda |-
+            if (thermostat_rooms.count < 6) return lv_color_white();
+            return lv_color_hex(ThermostatRooms::color_for(thermostat_rooms.room[5].action));
+      - lvgl.label.update:
+          id: main_rooms_label
+          text: !lambda 'return thermostat_rooms.main_summary();'
+      - lvgl.label.update:
+          id: rooms_title_label
+          text: !lambda |-
+            int f = id(rooms_focus);
+            if (f == 0) return std::string("Rooms");
+            if (f > thermostat_rooms.count) return std::string("");
+            return thermostat_rooms.room[f - 1].name;
+      - lvgl.label.update:
+          id: rooms_sub_label
+          text: !lambda |-
+            static char buf[48];
+            int f = id(rooms_focus);
+            if (f == 0) {
+              if (thermostat_rooms.count == 0) return std::string("No rooms yet");
+              snprintf(buf, sizeof(buf), "%d room%s  %d heating", thermostat_rooms.count,
+                       thermostat_rooms.count == 1 ? "" : "s", thermostat_rooms.heating());
+              return std::string(buf);
+            }
+            if (f > thermostat_rooms.count) return std::string("");
+            const ThermostatRoom &r = thermostat_rooms.room[f - 1];
+            if (std::isnan(r.temp)) return std::string("Now --");
+            snprintf(buf, sizeof(buf), "Now %.1f°", r.temp);
+            return std::string(buf);
+      - lvgl.label.update:
+          id: rooms_detail_label
+          text: !lambda |-
+            int f = id(rooms_focus);
+            if (f < 1 || f > thermostat_rooms.count) return std::string("");
+            const ThermostatRoom &r = thermostat_rooms.room[f - 1];
+            static char buf[32];
+            const char *a = "Idle";
+            if (r.action == "heating") a = "Heat";
+            else if (r.action == "cooling") a = "Cool";
+            else if (r.action == "off") a = "Off";
+            if (std::isnan(r.target)) return std::string(a);
+            snprintf(buf, sizeof(buf), "Set %.1f°  %s", r.target, a);
+            return std::string(buf);
+      - script.execute: refresh_menu_centre
+      - script.execute: refresh_room_page
+
+  - id: refresh_room_page
+    then:
+      - lvgl.label.update:
+          id: room_name_label
+          text: !lambda |-
+            int s = id(sel_room);
+            if (s < 1 || s > thermostat_rooms.count) return "";
+            return thermostat_rooms.room[s - 1].name.c_str();
+      - lvgl.label.update:
+          id: room_temp_label
+          text: !lambda |-
+            static char buf[24];
+            int s = id(sel_room);
+            if (s < 1 || s > thermostat_rooms.count || std::isnan(thermostat_rooms.room[s - 1].temp)) return "Now --";
+            snprintf(buf, sizeof(buf), "Now %.1f°C", thermostat_rooms.room[s - 1].temp);
+            return buf;
+      - lvgl.label.update:
+          id: room_target_label
+          text: !lambda |-
+            static char buf[16];
+            int s = id(sel_room);
+            if (s < 1 || s > thermostat_rooms.count) return "--";
+            float t = id(room_set_pending) ? id(room_set_target) : thermostat_rooms.room[s - 1].target;
+            if (std::isnan(t)) return "--";
+            snprintf(buf, sizeof(buf), "%.1f°C", t);
+            return buf;
+      - lvgl.label.update:
+          id: room_action_label
+          text: !lambda |-
+            int s = id(sel_room);
+            if (s < 1 || s > thermostat_rooms.count) return "";
+            const std::string &a = thermostat_rooms.room[s - 1].action;
+            if (a == "heating") return "Heating";
+            if (a == "cooling") return "Cooling";
+            if (a == "off") return "Off";
+            if (a == "idle") return "Idle";
+            return "";
+
+  # Each detent changes a local target and redraws at once. One request goes to
+  # HA after 700 ms of stillness. The HA script applies it to every unit in the
+  # room and coordinates the central heating (see the script blueprint).
+  - id: nudge_room_temp
+    parameters:
+      delta: float
+    then:
+      - lambda: |-
+          int s = id(sel_room);
+          if (s < 1 || s > thermostat_rooms.count) return;
+          const ThermostatRoom &r = thermostat_rooms.room[s - 1];
+          float base = id(room_set_pending) ? id(room_set_target) : r.target;
+          if (std::isnan(base)) base = r.temp;
+          if (std::isnan(base)) base = 20.0f;
+          float t = base + delta;
+          if (t < 16.0f) t = 16.0f;
+          if (t > 30.0f) t = 30.0f;
+          id(room_set_target) = t;
+          id(room_set_pending) = true;
+      - script.execute: refresh_room_page
+      - script.execute: send_room_temp
+
+  - id: send_room_temp
+    mode: restart
+    then:
+      - delay: 700ms
+      - if:
+          condition:
+            lambda: 'return id(sel_room) >= 1 && id(sel_room) <= thermostat_rooms.count;'
+          then:
+            - logger.log:
+                format: "room_temp: %s sending %.1f"
+                args: [ 'thermostat_rooms.room[id(sel_room) - 1].id.c_str()', 'id(room_set_target)' ]
+            - homeassistant.event:
+                event: ${room_set_event}
+                data:
+                  room: !lambda 'return thermostat_rooms.room[id(sel_room) - 1].id;'
+                  temperature: !lambda 'return id(room_set_target);'
+      # Keep the local value until HA sends the updated list (about 2 s), with a timeout.
+      - delay: 6s
+      - lambda: 'id(room_set_pending) = false;'
+      - script.execute: refresh_room_page
+
+  # --- target temperature ----------------------------------------------------
+  # Each detent changes a local target and redraws at once. The value is sent
+  # to HA once the dial has been still for 700 ms, so fast turns send one
+  # request, not one per detent.
+  - id: nudge_set_temp
+    parameters:
+      delta: float
+    then:
+      - lambda: |-
+          float base = id(set_temp_pending) ? id(set_temp_target) : id(set_temperature).state;
+          if (std::isnan(base)) base = id(shown_set_temp);
+          float t = base + delta;
+          if (t < 16.0f) t = 16.0f;    // roller range
+          if (t > 30.0f) t = 30.0f;    // climate.central_heating max_temp
+          id(set_temp_target) = t;
+          id(set_temp_pending) = true;
+      - script.execute: refresh_set_temp_ui
+      - script.execute: send_set_temp
+
+  - id: send_set_temp
+    mode: restart
+    then:
+      - delay: 700ms
+      - logger.log:
+          format: "set_temp: sending %.1f"
+          args: [ 'id(set_temp_target)' ]
+      - homeassistant.action:
+          action: climate.set_temperature
+          data:
+            entity_id: ${climate_entity}
+            temperature: !lambda 'return id(set_temp_target);'
+      # Keep the local value until HA echoes it back, with a timeout.
+      - delay: 3s
+      - lambda: 'id(set_temp_pending) = false;'
+      - script.execute: refresh_set_temp_ui
+
+  - id: refresh_set_temp_ui
+    then:
+      - lambda: |-
+          float t = id(set_temp_pending) ? id(set_temp_target) : id(set_temperature).state;
+          if (!std::isnan(t)) id(shown_set_temp) = t;
+      - lvgl.indicator.update:
+          id: set_temp_needle
+          value: !lambda 'return (int) lroundf(id(shown_set_temp) * 10);'
+      - lvgl.indicator.update:
+          id: diff_temp_arc
+          start_value: !lambda |-
+            float t = id(shown_set_temp);
+            float c = id(current_temperature).state;
+            if (std::isnan(c)) c = t;
+            return (int) lroundf(std::min(t, c) * 10);
+          end_value: !lambda |-
+            float t = id(shown_set_temp);
+            float c = id(current_temperature).state;
+            if (std::isnan(c)) c = t;
+            return (int) lroundf(std::max(t, c) * 10);
+      - lvgl.roller.update:
+          id: set_temp_roller
+          selected_index: !lambda |-
+            int i = (int) lroundf((id(shown_set_temp) - 16.0f) * 2.0f);
+            if (i < 0) i = 0;
+            if (i > 28) i = 28;
+            return i;
+
+  # Rotation while the heating is off switches it on. The 2 s delay stops one
+  # turn sending a request per detent.
+  - id: ui_heating_on
+    then:
+      - logger.log: "heating: turning on (rotation while off)"
+      - homeassistant.action:
+          action: climate.turn_on
+          data:
+            entity_id: ${climate_entity}
+      - delay: 2s
+
+  # hvac mode UI scripts
+  # Clock, weather and the focused item.
+  - id: update_menu_date_label
+    then:
+      - script.execute: refresh_menu_centre
+
+  - id: refresh_menu_centre
+    then:
+      - lvgl.label.update:
+          id: menu_title_label
+          text: !lambda |-
+            static char buf[16];
+            int f = id(menu_focus);
+            if (f == 0) {
+              auto now = id(hass_time).now();
+              static const char * const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+              int d = now.day_of_week;
+              if (d < 1 || d > 7) return std::string("--:--");
+              snprintf(buf, sizeof(buf), "%s %02d:%02d", days[d - 1], now.hour, now.minute);
+              return std::string(buf);
+            }
+            if (f == 1) return std::string("Mode");
+            int i = f - 2;
+            if (i < 0 || i >= thermostat_rooms.count) return std::string("");
+            return thermostat_rooms.room[i].name;
+      - lvgl.label.update:
+          id: menu_detail_label
+          text: !lambda |-
+            static char buf[32];
+            int f = id(menu_focus);
+            auto mode_name = [](const std::string &m) -> std::string {
+              if (m == "off") return "Off";
+              if (m == "heat") return "Heat only";
+              if (m == "cool") return "Cool only";
+              if (m == "heat_cool") return "Heat or cool";
+              return "";
+            };
+            if (f == 0) {
+              if (thermostat_weather.valid) return thermostat_weather.outside_line();
+              if (thermostat_rooms.count == 0) return std::string("No rooms yet");
+              snprintf(buf, sizeof(buf), "%d rooms  %d heating", thermostat_rooms.count, thermostat_rooms.heating());
+              return std::string(buf);
+            }
+            if (f == 1) return mode_name(id(hvac_mode).state);
+            int i = f - 2;
+            if (i < 0 || i >= thermostat_rooms.count || std::isnan(thermostat_rooms.room[i].temp)) return std::string("Now --");
+            snprintf(buf, sizeof(buf), "Now %.1f°", thermostat_rooms.room[i].temp);
+            return std::string(buf);
+      - lvgl.label.update:
+          id: menu_extra_label
+          text: !lambda |-
+            static char buf[32];
+            int f = id(menu_focus);
+            if (f == 0) return thermostat_weather.forecast_line();
+            if (f == 1) return std::string("");
+            int i = f - 2;
+            if (i < 0 || i >= thermostat_rooms.count) return std::string("");
+            const ThermostatRoom &r = thermostat_rooms.room[i];
+            const char *act = "Idle";
+            if (r.action == "heating") act = "Heat";
+            else if (r.action == "cooling") act = "Cool";
+            else if (r.action == "off") act = "Off";
+            if (std::isnan(r.target)) return std::string(act);
+            snprintf(buf, sizeof(buf), "Set %.1f°  %s", r.target, act);
+            return std::string(buf);
+
+  - id: set_mode_off
+    then:
+      - script.execute: hide_widgets
+      - lvgl.label.update:
+          id: mode_label
+          text: "OFF"
+      - lvgl.widget.update:
+          id: mode_bg
+          bg_color: mode_off
+      - lvgl.label.update:
+          id: menu_mode_button_label
+          text: "\U000F0425"
+          text_color: white
+      - lvgl.widget.update:
+          id: mode_off_button
+          text_color: white
+      - lvgl.widget.update:
+          id: mode_heat_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_cool_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_cool_button
+          text_color: graydark
+      - script.execute: refresh_menu_centre
+
+  - id: set_mode_heat
+    then:
+      - script.execute: show_widgets
+      - lvgl.label.update:
+          id: mode_label
+          text: "HEAT ONLY"
+      - lvgl.widget.update:
+          id: mode_bg
+          bg_color: mode_heat
+      - lvgl.label.update:
+          id: menu_mode_button_label
+          text: "\U000F0238"
+          text_color: mode_heat
+      - lvgl.widget.update:
+          id: mode_off_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_button
+          text_color: mode_heat
+      - lvgl.widget.update:
+          id: mode_cool_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_cool_button
+          text_color: graydark
+      - script.execute: refresh_menu_centre
+
+  - id: set_mode_cool
+    then:
+      - script.execute: show_widgets
+      - lvgl.label.update:
+          id: mode_label
+          text: "COOL ONLY"
+      - lvgl.widget.update:
+          id: mode_bg
+          bg_color: mode_cool
+      - lvgl.label.update:
+          id: menu_mode_button_label
+          text: "\U000F0717"
+          text_color: mode_cool
+      - lvgl.widget.update:
+          id: mode_off_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_cool_button
+          text_color: mode_cool
+      - lvgl.widget.update:
+          id: mode_heat_cool_button
+          text_color: graydark
+      - script.execute: refresh_menu_centre
+
+  - id: set_mode_heat_cool
+    then:
+      - script.execute: show_widgets
+      - lvgl.label.update:
+          id: mode_label
+          text: "HEAT OR COOL"
+      - lvgl.widget.update:
+          id: mode_bg
+          bg_color: mode_heat_cool
+      - lvgl.label.update:
+          id: menu_mode_button_label
+          text: "\U000F1A79"
+          text_color: mode_heat_cool
+      - lvgl.widget.update:
+          id: mode_off_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_cool_button
+          text_color: graydark
+      - lvgl.widget.update:
+          id: mode_heat_cool_button
+          text_color: mode_heat_cool
+      - script.execute: refresh_menu_centre
+
+  # Outdoor weather from thermostat_weather (set_weather action). Redraws every
+  # label that shows it. Also called when the data expires.
+  - id: refresh_weather_ui
+    then:
+      - lvgl.label.update:
+          id: weather_icon_label
+          text: !lambda 'return std::string(thermostat_weather.icon());'
+      - lvgl.label.update:
+          id: weather_temp_label
+          text: !lambda |-
+            static std::string s;
+            s = thermostat_weather.valid ? thermostat_weather.temp_text() : "";
+            return s.c_str();
+      - lvgl.label.update:
+          id: weather_forecast_label
+          text: !lambda |-
+            static std::string s;
+            s = thermostat_weather.forecast_line();
+            return s.c_str();
+      - lvgl.label.update:
+          id: weather_feels_like_label
+          text: !lambda |-
+            static std::string s;
+            s = thermostat_weather.detail_line();
+            return s.c_str();
+      - script.execute: refresh_menu_centre
+      - lvgl.label.update:
+          id: rooms_weather_label
+          text: !lambda |-
+            static std::string s;
+            s = thermostat_weather.outside_line();
+            return s.c_str();
+      - lvgl.label.update:
+          id: room_outside_label
+          text: !lambda |-
+            static std::string s;
+            s = thermostat_weather.outside_line();
+            return s.c_str();
+
+  - id: show_widgets
+    then:
+      - lvgl.widget.show:
+        - current_temp_arc
+        - set_temp_roller
+        - celsius_label
+        - current_temp_label
+        - main_rooms_label
+        - meter_ticks
+        - mode_label
+      - lvgl.widget.hide:
+        - weather_icon_label
+        - weather_temp_label
+        - weather_forecast_label
+        - weather_feels_like_label
+      - lvgl.indicator.update:
+          id: set_temp_needle
+          opa: COVER
+      - lvgl.indicator.update:
+          id: diff_temp_arc
+          opa: COVER
+  - id: hide_widgets
+    then:
+      - lvgl.widget.hide:
+        - current_temp_arc
+        - set_temp_roller
+        - celsius_label
+        - current_temp_label
+        - main_rooms_label
+        - meter_ticks
+        - mode_label
+      - lvgl.widget.show:
+        - weather_icon_label
+        - weather_temp_label
+        - weather_forecast_label
+        - weather_feels_like_label
+      - lvgl.indicator.update:
+          id: set_temp_needle
+          opa: TRANSP
+      - lvgl.indicator.update:
+          id: diff_temp_arc
+          opa: TRANSP

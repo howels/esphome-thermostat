@@ -1,0 +1,1032 @@
+blueprint:
+  name: Thermostat rooms controller
+  source_url: https://github.com/howels/esphome-thermostat/blob/main/blueprints/thermostat_rooms.yaml
+  description: >-
+    Single blueprint for the WT32S3-21S rotary thermostat. It sends the room
+    list and outdoor weather to the thermostat, coordinates central heating,
+    radiator valves and air conditioning when a room temperature is requested on
+    the dial, and compensates for the gap between each unit's internal sensor
+    and an external room temperature sensor.
+
+
+    Create one automation: Settings > Automations & scenes > Create automation >
+    Use a blueprint. Configure up to six rooms in the Room 1..6 sections below
+    (leave unused room areas empty). Each room's area, icon, optional external
+    temperature sensor, and heating/cooling max offsets are configured together.
+
+
+    Room list. The automation sends the list to the thermostat every minute, at
+    Home Assistant start, when the thermostat connects, when it opens the Rooms
+    page, and two seconds after each request. Each area is grouped
+    automatically. Climate entities with a cool mode are air conditioning
+    units. All other climate entities are radiator valves. The central heating
+    thermostat and any entity carrying the exclusion label are ignored. Moving
+    a unit to another area, or labelling it, takes effect at the next update.
+
+
+    External sensor offset. When a room has an external temperature sensor
+    (either chosen explicitly in that room's section or auto-detected from the
+    area):
+    - Heating (radiator valves and AC in heat mode): if the external sensor is
+      below the requested target and 0 < (unit_temp - external_temp) <= heat
+      max offset, the unit setpoint is raised by that gap so it continues
+      heating until the external sensor reaches the target. Gaps above the
+      max offset or sensor readings outside 0–45 °C are ignored.
+    - Cooling (AC in cool mode): if the external sensor is above the requested
+      target and 0 < (external_temp - unit_temp) <= cool max offset, the unit
+      setpoint is lowered by that gap so it continues cooling until the
+      external sensor reaches the target. Gaps above the max offset or sensor
+      readings outside 0–45 °C are ignored.
+    To enable continuous 1-minute offset tracking without runaway, select the
+    thermostat's "Room targets" text entity (created automatically once the
+    firmware is flashed). You can leave it empty during initial setup.
+
+
+    Request for T degrees from the thermostat.
+    1. If "Raise the central heating target" is on, the central heating is on
+       and T is above its target, the central target is raised to T, never
+       above the maximum set here.
+    2. Radiator valves that are not off are set to T (with heating offset),
+       limited to the central heating target when that option is on.
+    3. Air conditioning units in heat or cool mode are set to T (with heating
+       or cooling offset), unless the policy says to leave them alone.
+    4. If "Air conditioning assist" is on, T is above what the valves are
+       allowed, and the room is colder than T by more than the gap, air
+       conditioning units that are off are switched to heat at T. Nothing in
+       this automation switches them off again.
+
+
+    Weather. Outdoor conditions are pushed alongside the room list. Today's
+    high, low and chance of rain come from weather.get_forecasts (daily). The
+    optional outdoor temperature, humidity and feels-like sensors override the
+    matching weather entity attributes when numeric.
+
+
+    The automation uses esphome.thermostat_wt32s3_21s_set_rooms and
+    esphome.thermostat_wt32s3_21s_set_weather, and listens for
+    esphome.thermostat_room_set and esphome.thermostat_rooms_request. The
+    ESPHome device must be allowed to perform Home Assistant actions.
+  domain: automation
+  input:
+    room_1:
+      name: Room 1
+      collapsed: false
+      input:
+        room_1_area:
+          name: Area
+          description: Area for Room 1. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_1_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_1_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_1_heat_max_offset:
+          name: Heating max offset
+          description: Maximum gap (unit - external) allowed when boosting heating. 0 disables offset.
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_1_cool_max_offset:
+          name: Cooling max offset
+          description: Maximum gap (external - unit) allowed when boosting cooling. 0 disables offset.
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    room_2:
+      name: Room 2
+      collapsed: true
+      input:
+        room_2_area:
+          name: Area
+          description: Area for Room 2. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_2_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_2_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_2_heat_max_offset:
+          name: Heating max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_2_cool_max_offset:
+          name: Cooling max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    room_3:
+      name: Room 3
+      collapsed: true
+      input:
+        room_3_area:
+          name: Area
+          description: Area for Room 3. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_3_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_3_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_3_heat_max_offset:
+          name: Heating max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_3_cool_max_offset:
+          name: Cooling max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    room_4:
+      name: Room 4
+      collapsed: true
+      input:
+        room_4_area:
+          name: Area
+          description: Area for Room 4. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_4_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_4_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_4_heat_max_offset:
+          name: Heating max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_4_cool_max_offset:
+          name: Cooling max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    room_5:
+      name: Room 5
+      collapsed: true
+      input:
+        room_5_area:
+          name: Area
+          description: Area for Room 5. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_5_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_5_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_5_heat_max_offset:
+          name: Heating max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_5_cool_max_offset:
+          name: Cooling max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    room_6:
+      name: Room 6
+      collapsed: true
+      input:
+        room_6_area:
+          name: Area
+          description: Area for Room 6. Leave empty to skip.
+          default: ""
+          selector:
+            area: {}
+        room_6_icon:
+          name: Icon
+          default: ""
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - { label: "Initial letter (default)", value: "" }
+                - { label: "Bed (Bedroom)", value: "bed" }
+                - { label: "Sofa (Living room)", value: "sofa" }
+                - { label: "Stove (Kitchen)", value: "stove" }
+                - { label: "Desk (Study / Office)", value: "desk" }
+                - { label: "Shower (Bathroom)", value: "shower" }
+                - { label: "Table & chair (Dining)", value: "table_chair" }
+                - { label: "Home (Hallway)", value: "home" }
+                - { label: "Stairs (Landing)", value: "stairs" }
+                - { label: "Washing machine (Utility)", value: "washing" }
+                - { label: "Garage", value: "garage" }
+                - { label: "Nursery", value: "baby" }
+                - { label: "Radiator", value: "radiator" }
+                - { label: "Thermometer", value: "thermometer" }
+        room_6_temp_sensor:
+          name: External temperature sensor
+          description: Optional. Leave empty to use temperature sensors in the area automatically.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        room_6_heat_max_offset:
+          name: Heating max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+        room_6_cool_max_offset:
+          name: Cooling max offset
+          default: 3.0
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.5
+              unit_of_measurement: "°C"
+
+    central_climate:
+      name: Central heating thermostat
+      description: Excluded from every room. Its target limits the radiator valves.
+      default: climate.central_heating
+      selector:
+        entity:
+          filter:
+            - domain: climate
+    room_targets_entity:
+      name: Room targets store entity
+      description: >-
+        Optional. Pick the "Room targets" text entity exposed by the thermostat
+        firmware (e.g. text.thermostat_wt32s3_21s_..._room_targets) to remember
+        requested room targets for continuous external-sensor offset tracking.
+        Leave empty during initial setup before flashing the firmware.
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: text
+    exclude_label:
+      name: Exclusion label
+      description: Optional. Entities with this label are ignored.
+      default: ""
+      selector:
+        label: {}
+    limit_trvs_to_central:
+      name: Limit radiator valves to the central heating target
+      default: true
+      selector:
+        boolean: {}
+    raise_central:
+      name: Raise the central heating target when a room asks for more
+      default: false
+      selector:
+        boolean: {}
+    raise_central_max:
+      name: Highest central heating target the automation may set
+      default: 22
+      selector:
+        number:
+          min: 16
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+    ac_policy:
+      name: Air conditioning units
+      description: What to do with air conditioning units when the target changes.
+      default: adjust_running
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - label: Adjust units that are running
+              value: adjust_running
+            - label: Leave air conditioning alone
+              value: ignore
+    ac_assist:
+      name: Air conditioning assist
+      description: Switch air conditioning on in heat mode when the valves cannot reach the request.
+      default: false
+      selector:
+        boolean: {}
+    ac_assist_gap:
+      name: Assist gap
+      description: Assist only if the room is colder than the request by more than this.
+      default: 0.5
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 0.5
+          unit_of_measurement: "°C"
+    weather_entity:
+      name: Weather entity
+      description: >-
+        Source of the outdoor condition, wind and the daily forecast. Leave
+        empty to hide weather on the thermostat.
+      default: weather.tomorrow_io_home_daily
+      selector:
+        entity:
+          filter:
+            - domain: weather
+    outdoor_temperature:
+      name: Outdoor temperature sensor
+      description: Optional. Overrides the temperature of the weather entity.
+      default: sensor.outdoor_thermometer_temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+    outdoor_humidity:
+      name: Outdoor humidity sensor
+      description: Optional. Overrides the humidity of the weather entity.
+      default: sensor.outdoor_thermometer_humidity
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: humidity
+    feels_like:
+      name: Feels-like temperature sensor
+      description: Optional. Overrides the apparent temperature of the weather entity.
+      default: sensor.tomorrow_io_home_feels_like
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+
+mode: queued
+max: 10
+max_exceeded: silent
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/1"
+    id: refresh
+  - trigger: homeassistant
+    event: start
+    id: refresh
+  - trigger: event
+    event_type: esphome.thermostat_rooms_request
+    id: refresh
+  - trigger: event
+    event_type: esphome.thermostat_room_set
+    id: set
+
+variables:
+  raw_slots:
+    - area: !input room_1_area
+      icon: !input room_1_icon
+      sensor: !input room_1_temp_sensor
+      heat_max: !input room_1_heat_max_offset
+      cool_max: !input room_1_cool_max_offset
+    - area: !input room_2_area
+      icon: !input room_2_icon
+      sensor: !input room_2_temp_sensor
+      heat_max: !input room_2_heat_max_offset
+      cool_max: !input room_2_cool_max_offset
+    - area: !input room_3_area
+      icon: !input room_3_icon
+      sensor: !input room_3_temp_sensor
+      heat_max: !input room_3_heat_max_offset
+      cool_max: !input room_3_cool_max_offset
+    - area: !input room_4_area
+      icon: !input room_4_icon
+      sensor: !input room_4_temp_sensor
+      heat_max: !input room_4_heat_max_offset
+      cool_max: !input room_4_cool_max_offset
+    - area: !input room_5_area
+      icon: !input room_5_icon
+      sensor: !input room_5_temp_sensor
+      heat_max: !input room_5_heat_max_offset
+      cool_max: !input room_5_cool_max_offset
+    - area: !input room_6_area
+      icon: !input room_6_icon
+      sensor: !input room_6_temp_sensor
+      heat_max: !input room_6_heat_max_offset
+      cool_max: !input room_6_cool_max_offset
+  room_slots: >-
+    {% set ns = namespace(out=[]) %}
+    {% for s in raw_slots if s.area is string and s.area != '' %}
+      {% set ns.out = ns.out + [s] %}
+    {% endfor %}
+    {{ ns.out }}
+  rooms_in: "{{ room_slots | map(attribute='area') | list }}"
+  central: !input central_climate
+  targets_entity: !input room_targets_entity
+  exclude_label: !input exclude_label
+  limit_trvs: !input limit_trvs_to_central
+  raise_central: !input raise_central
+  raise_central_max: !input raise_central_max
+  ac_policy: !input ac_policy
+  ac_assist: !input ac_assist
+  ac_assist_gap: !input ac_assist_gap
+  weather_entity: !input weather_entity
+  outdoor_temperature: !input outdoor_temperature
+  outdoor_humidity: !input outdoor_humidity
+  feels_like: !input feels_like
+  # Stored requested room targets ("area=19.0;area2=21.5") from the thermostat's text entity.
+  stored_targets: >-
+    {% set ns = namespace(m={}) %}
+    {% set raw = states(targets_entity) if targets_entity else '' %}
+    {% if raw not in ['', 'unknown', 'unavailable'] %}
+      {% for pair in raw.split(';') if '=' in pair %}
+        {% set k, v = pair.split('=', 1) %}
+        {% if is_number(v) %}{% set ns.m = dict(ns.m, **{k: v | float}) %}{% endif %}
+      {% endfor %}
+    {% endif %}
+    {{ ns.m }}
+
+actions:
+  # Branch 1: A temperature request from the thermostat dial.
+  - if:
+      - condition: trigger
+        id: set
+      - condition: template
+        value_template: "{{ trigger.event.data.room in rooms_in }}"
+    then:
+      - variables:
+          room: "{{ trigger.event.data.room }}"
+          room_slot: "{{ (room_slots | selectattr('area', 'eq', trigger.event.data.room) | list)[0] }}"
+          requested: "{{ [[trigger.event.data.temperature | float(20), 4.0] | max, 35.0] | min }}"
+          central_target: "{{ state_attr(central, 'temperature') | float(0) }}"
+          central_on: "{{ states(central) not in ['off', 'unavailable', 'unknown'] }}"
+          heat_max: "{{ room_slot.heat_max | float(3.0) }}"
+          cool_max: "{{ room_slot.cool_max | float(3.0) }}"
+          ext_sensor: "{{ room_slot.sensor or '' }}"
+          updated_targets: "{{ dict(stored_targets, **{room: requested}) }}"
+          updated_targets_str: >-
+            {% set ns = namespace(parts=[]) %}
+            {% for a in rooms_in if a in updated_targets %}
+              {% set ns.parts = ns.parts + [a ~ '=' ~ ('%.1f' | format(updated_targets[a] | float))] %}
+            {% endfor %}
+            {{ ns.parts | join(';') }}
+      # Persist the requested room target so periodic external-sensor monitoring has no runaway.
+      - if:
+          - condition: template
+            value_template: "{{ targets_entity != '' and states(targets_entity) not in ['unavailable'] }}"
+        then:
+          - action: text.set_value
+            target:
+              entity_id: "{{ targets_entity }}"
+            data:
+              value: "{{ updated_targets_str }}"
+            continue_on_error: true
+      - variables:
+          members: >-
+            {% set excluded = label_entities(exclude_label) if exclude_label else [] %}
+            {% set inroom = area_entities(room) | reject('in', excluded) | list %}
+            {% set r = namespace(trv=[], ac=[], sens=[], at=[], tt=[]) %}
+            {% for e in inroom | select('match', '^climate[.]') | reject('eq', central) %}
+              {% if 'cool' in (state_attr(e, 'hvac_modes') or []) %}
+                {% set r.ac = r.ac + [e] %}
+              {% else %}
+                {% set r.trv = r.trv + [e] %}
+              {% endif %}
+            {% endfor %}
+            {% if ext_sensor != '' and is_number(states(ext_sensor)) %}
+              {% set r.sens = [states(ext_sensor) | float] %}
+            {% else %}
+              {% for e in inroom | select('match', '^sensor[.]') if not (e | regex_search('device|outdoor|battery|cpu|mcu|raspberry|extruder|aggregate')) and is_state_attr(e, 'device_class', 'temperature') and is_number(states(e)) %}
+                {% set r.sens = r.sens + [states(e) | float] %}
+              {% endfor %}
+            {% endif %}
+            {% for e in r.ac %}{% set c = state_attr(e, 'current_temperature') %}{% if is_number(c) %}{% set r.at = r.at + [c | float] %}{% endif %}{% endfor %}
+            {% for e in r.trv %}{% set c = state_attr(e, 'current_temperature') %}{% if is_number(c) %}{% set r.tt = r.tt + [c | float] %}{% endif %}{% endfor %}
+            {% set sp = (r.sens or r.at or r.tt) | sort %}
+            {% set n = sp | length %}
+            {% set temp = ((sp[n // 2] if n % 2 else (sp[n // 2 - 1] + sp[n // 2]) / 2) | round(1)) if n else none %}
+            {{ {'trvs': r.trv, 'acs': r.ac, 'temp': temp, 'has_ext': (r.sens | length) > 0} }}
+      - variables:
+          # Valve limit: the central target, or the raised central target when
+          # step 1 will apply, or 35 (the valve maximum) when limiting is off.
+          trv_cap: >-
+            {% set raised = [requested, raise_central_max] | min %}
+            {% set central_after = raised if (raise_central and central_on and requested > central_target) else central_target %}
+            {{ central_after if limit_trvs else 35 }}
+      # 1. central heating
+      - if:
+          - condition: template
+            value_template: "{{ raise_central and central_on and requested > central_target }}"
+        then:
+          - action: climate.set_temperature
+            target:
+              entity_id: "{{ central }}"
+            data:
+              temperature: "{{ [requested, raise_central_max] | min }}"
+      # 2. radiator valves (with heating external-sensor offset)
+      - repeat:
+          for_each: "{{ members.trvs }}"
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ states(repeat.item) not in ['off', 'unavailable', 'unknown'] }}"
+              then:
+                - action: climate.set_temperature
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    temperature: >-
+                      {% set u = state_attr(repeat.item, 'current_temperature') %}
+                      {% set hmax = [[heat_max | float(0), 0] | max, 10] | min %}
+                      {% set sp = requested %}
+                      {% if members.has_ext and hmax > 0 and is_number(u) %}
+                        {% set uf = u | float %}
+                        {% set ext = members.temp | float %}
+                        {% set gap = uf - ext %}
+                        {% if 0 <= ext <= 45 and 0 <= uf <= 45 and (gap | abs) <= hmax %}
+                          {% if ext < requested and gap > 0 %}
+                            {% set sp = requested + gap %}
+                          {% elif ext >= requested and uf < requested and gap < 0 %}
+                            {% set sp = requested + gap %}
+                          {% endif %}
+                        {% endif %}
+                      {% endif %}
+                      {% set sp = [[sp, requested - hmax] | max, requested + hmax] | min %}
+                      {% set sp = ((sp * 2) | round(0) / 2) %}
+                      {% set sp = [sp, trv_cap] | min %}
+                      {% set sp = [sp, state_attr(repeat.item, 'max_temp') | float(35)] | min %}
+                      {{ [sp, state_attr(repeat.item, 'min_temp') | float(4)] | max }}
+      # 3. air conditioning that is running (with heating or cooling external-sensor offset)
+      - repeat:
+          for_each: "{{ members.acs if ac_policy == 'adjust_running' else [] }}"
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ states(repeat.item) in ['heat', 'cool'] }}"
+              then:
+                - action: climate.set_temperature
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    temperature: >-
+                      {% set mode = states(repeat.item) %}
+                      {% set u = state_attr(repeat.item, 'current_temperature') %}
+                      {% set hmax = [[heat_max | float(0), 0] | max, 10] | min %}
+                      {% set cmax = [[cool_max | float(0), 0] | max, 10] | min %}
+                      {% set sp = requested %}
+                      {% if members.has_ext and is_number(u) %}
+                        {% set uf = u | float %}
+                        {% set ext = members.temp | float %}
+                        {% if 0 <= ext <= 45 and 0 <= uf <= 45 %}
+                          {% if mode == 'heat' and hmax > 0 %}
+                            {% set gap = uf - ext %}
+                            {% if (gap | abs) <= hmax %}
+                              {% if ext < requested and gap > 0 %}
+                                {% set sp = requested + gap %}
+                              {% elif ext >= requested and uf < requested and gap < 0 %}
+                                {% set sp = requested + gap %}
+                              {% endif %}
+                            {% endif %}
+                            {% set sp = [[sp, requested - hmax] | max, requested + hmax] | min %}
+                          {% elif mode == 'cool' and cmax > 0 %}
+                            {% set gap = ext - uf %}
+                            {% if (gap | abs) <= cmax %}
+                              {% if ext > requested and gap > 0 %}
+                                {% set sp = requested - gap %}
+                              {% elif ext <= requested and uf > requested and gap < 0 %}
+                                {% set sp = requested - gap %}
+                              {% endif %}
+                            {% endif %}
+                            {% set sp = [[sp, requested - cmax] | max, requested + cmax] | min %}
+                          {% endif %}
+                        {% endif %}
+                      {% endif %}
+                      {% set sp = ((sp * 2) | round(0) / 2) %}
+                      {% set sp = [sp, state_attr(repeat.item, 'max_temp') | float(30)] | min %}
+                      {{ [sp, state_attr(repeat.item, 'min_temp') | float(16)] | max }}
+      # 4. air conditioning assist
+      - repeat:
+          for_each: >-
+            {{ members.acs if (ac_assist and ac_policy != 'ignore' and requested > trv_cap
+                               and members.temp is not none
+                               and members.temp < requested - ac_assist_gap) else [] }}
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ states(repeat.item) == 'off' and 'heat' in (state_attr(repeat.item, 'hvac_modes') or []) }}"
+              then:
+                - action: climate.set_hvac_mode
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    hvac_mode: heat
+                - action: climate.set_temperature
+                  target:
+                    entity_id: "{{ repeat.item }}"
+                  data:
+                    temperature: >-
+                      {% set t = [requested, state_attr(repeat.item, 'max_temp') | float(30)] | min %}
+                      {{ [t, state_attr(repeat.item, 'min_temp') | float(16)] | max }}
+      # Let the units report their new targets before the list is sent back.
+      - delay: 2
+
+    # Branch 2: Periodic external-sensor offset tracking for rooms with stored targets.
+    else:
+      - variables:
+          central_target: "{{ state_attr(central, 'temperature') | float(0) }}"
+          trv_cap: "{{ central_target if limit_trvs else 35 }}"
+          offset_adjustments: >-
+            {% set excluded = label_entities(exclude_label) if exclude_label else [] %}
+            {% set ns = namespace(calls=[]) %}
+            {% for slot in room_slots if slot.area in stored_targets %}
+              {% set area = slot.area %}
+              {% set req = stored_targets[area] | float %}
+              {% set hmax = [[slot.heat_max | float(0), 0] | max, 10] | min %}
+              {% set cmax = [[slot.cool_max | float(0), 0] | max, 10] | min %}
+              {% set req_c = [[req, 4.0] | max, 35.0] | min %}
+              {% set ext_sensor = slot.sensor or '' %}
+              {% set inroom = area_entities(area) | reject('in', excluded) | list %}
+              {% set r = namespace(trv=[], ac=[], sens=[]) %}
+              {% for e in inroom | select('match', '^climate[.]') | reject('eq', central) %}
+                {% if 'cool' in (state_attr(e, 'hvac_modes') or []) %}
+                  {% set r.ac = r.ac + [e] %}
+                {% else %}
+                  {% set r.trv = r.trv + [e] %}
+                {% endif %}
+              {% endfor %}
+              {% if ext_sensor != '' and is_number(states(ext_sensor)) %}
+                {% set r.sens = [states(ext_sensor) | float] %}
+              {% else %}
+                {% for e in inroom | select('match', '^sensor[.]') if not (e | regex_search('device|outdoor|battery|cpu|mcu|raspberry|extruder|aggregate')) and is_state_attr(e, 'device_class', 'temperature') and is_number(states(e)) %}
+                  {% set r.sens = r.sens + [states(e) | float] %}
+                {% endfor %}
+              {% endif %}
+              {% if r.sens | length > 0 %}
+                {% set sp_s = r.sens | sort %}
+                {% set n = sp_s | length %}
+                {% set ext = (sp_s[n // 2] if n % 2 else (sp_s[n // 2 - 1] + sp_s[n // 2]) / 2) | round(1) %}
+                {% for e in r.trv if hmax > 0 and states(e) not in ['off', 'unavailable', 'unknown'] %}
+                  {% set u = state_attr(e, 'current_temperature') %}
+                  {% set cur_sp = state_attr(e, 'temperature') %}
+                  {% if is_number(u) and is_number(cur_sp) %}
+                    {% set uf = u | float %}
+                    {% set sp = req_c %}
+                    {% if 0 <= ext <= 45 and 0 <= uf <= 45 %}
+                      {% set gap = uf - ext %}
+                      {% if (gap | abs) <= hmax %}
+                        {% if ext < req_c and gap > 0 %}
+                          {% set sp = req_c + gap %}
+                        {% elif ext >= req_c and uf < req_c and gap < 0 %}
+                          {% set sp = req_c + gap %}
+                        {% endif %}
+                      {% endif %}
+                    {% endif %}
+                    {% set sp = [[sp, req_c - hmax] | max, req_c + hmax] | min %}
+                    {% set sp = ((sp * 2) | round(0) / 2) %}
+                    {% set sp = [sp, trv_cap] | min %}
+                    {% set sp = [sp, state_attr(e, 'max_temp') | float(35)] | min %}
+                    {% set sp = [sp, state_attr(e, 'min_temp') | float(4)] | max %}
+                    {% if (sp - (cur_sp | float)) | abs >= 0.5 %}
+                      {% set ns.calls = ns.calls + [{'entity_id': e, 'temperature': sp}] %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {% if ac_policy == 'adjust_running' %}
+                  {% for e in r.ac if states(e) in ['heat', 'cool'] %}
+                    {% set mode = states(e) %}
+                    {% set u = state_attr(e, 'current_temperature') %}
+                    {% set cur_sp = state_attr(e, 'temperature') %}
+                    {% if is_number(u) and is_number(cur_sp) %}
+                      {% set uf = u | float %}
+                      {% set sp = req_c %}
+                      {% if 0 <= ext <= 45 and 0 <= uf <= 45 %}
+                        {% if mode == 'heat' and hmax > 0 %}
+                          {% set gap = uf - ext %}
+                          {% if (gap | abs) <= hmax %}
+                            {% if ext < req_c and gap > 0 %}
+                              {% set sp = req_c + gap %}
+                            {% elif ext >= req_c and uf < req_c and gap < 0 %}
+                              {% set sp = req_c + gap %}
+                            {% endif %}
+                          {% endif %}
+                          {% set sp = [[sp, req_c - hmax] | max, req_c + hmax] | min %}
+                        {% elif mode == 'cool' and cmax > 0 %}
+                          {% set gap = ext - uf %}
+                          {% if (gap | abs) <= cmax %}
+                            {% if ext > req_c and gap > 0 %}
+                              {% set sp = req_c - gap %}
+                            {% elif ext <= req_c and uf > req_c and gap < 0 %}
+                              {% set sp = req_c - gap %}
+                            {% endif %}
+                          {% endif %}
+                          {% set sp = [[sp, req_c - cmax] | max, req_c + cmax] | min %}
+                        {% endif %}
+                      {% endif %}
+                      {% set sp = ((sp * 2) | round(0) / 2) %}
+                      {% set sp = [sp, state_attr(e, 'max_temp') | float(30)] | min %}
+                      {% set sp = [sp, state_attr(e, 'min_temp') | float(16)] | max %}
+                      {% if (sp - (cur_sp | float)) | abs >= 0.5 %}
+                        {% set ns.calls = ns.calls + [{'entity_id': e, 'temperature': sp}] %}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.calls }}
+      - repeat:
+          for_each: "{{ offset_adjustments }}"
+          sequence:
+            - action: climate.set_temperature
+              target:
+                entity_id: "{{ repeat.item.entity_id }}"
+              data:
+                temperature: "{{ repeat.item.temperature }}"
+
+  # Room list: "v1;" then one record per room, area_id|name|temperature|target|action|icon.
+  - variables:
+      effective_targets: >-
+        {% if trigger.id == 'set' and trigger.event.data.room in rooms_in %}
+          {{ dict(stored_targets, **{trigger.event.data.room: trigger.event.data.temperature | float}) }}
+        {% else %}
+          {{ stored_targets }}
+        {% endif %}
+      payload: >-
+        {% set excluded = label_entities(exclude_label) if exclude_label else [] %}
+        {% set ns = namespace(out=[]) %}
+        {% for slot in room_slots %}
+          {% set area = slot.area %}
+          {% set icon = slot.icon or '' %}
+          {% set ext_sensor = slot.sensor or '' %}
+          {% set members = area_entities(area) | reject('in', excluded) | list %}
+          {% set r = namespace(trv=[], ac=[], sens=[], at=[], tt=[], ttar=[], atar=[], acts=[], off=0) %}
+          {% for e in members | select('match', '^climate[.]') | reject('eq', central) %}
+            {% if 'cool' in (state_attr(e, 'hvac_modes') or []) %}
+              {% set r.ac = r.ac + [e] %}
+            {% else %}
+              {% set r.trv = r.trv + [e] %}
+            {% endif %}
+            {% set r.acts = r.acts + [state_attr(e, 'hvac_action')] %}
+            {% if states(e) == 'off' %}{% set r.off = r.off + 1 %}{% endif %}
+          {% endfor %}
+          {% if ext_sensor != '' and is_number(states(ext_sensor)) %}
+            {% set r.sens = [states(ext_sensor) | float] %}
+          {% else %}
+            {% for e in members | select('match', '^sensor[.]') if not (e | regex_search('device|outdoor|battery|cpu|mcu|raspberry|extruder|aggregate')) and is_state_attr(e, 'device_class', 'temperature') and is_number(states(e)) %}
+              {% set r.sens = r.sens + [states(e) | float] %}
+            {% endfor %}
+          {% endif %}
+          {% for e in r.ac %}
+            {% set c = state_attr(e, 'current_temperature') %}
+            {% if is_number(c) %}{% set r.at = r.at + [c | float] %}{% endif %}
+            {% set c = state_attr(e, 'temperature') %}
+            {% if states(e) not in ['off', 'unavailable', 'unknown'] and is_number(c) %}{% set r.atar = r.atar + [c | float] %}{% endif %}
+          {% endfor %}
+          {% for e in r.trv %}
+            {% set c = state_attr(e, 'current_temperature') %}
+            {% if is_number(c) %}{% set r.tt = r.tt + [c | float] %}{% endif %}
+            {% set c = state_attr(e, 'temperature') %}
+            {% if states(e) not in ['off', 'unavailable', 'unknown'] and is_number(c) %}{% set r.ttar = r.ttar + [c | float] %}{% endif %}
+          {% endfor %}
+          {% set sp = (r.sens or r.at or r.tt) | sort %}
+          {% set n = sp | length %}
+          {% set temp = ((sp[n // 2] if n % 2 else (sp[n // 2 - 1] + sp[n // 2]) / 2) | round(1)) if n else '' %}
+          {% set tv = r.ttar or r.atar %}
+          {% if area in effective_targets %}
+            {% set target = effective_targets[area] | float | round(1) %}
+          {% elif tv %}
+            {% set target = (tv | sum / tv | length) | round(1) %}
+          {% else %}
+            {% set target = '' %}
+          {% endif %}
+          {% set units = r.trv | length + r.ac | length %}
+          {% if 'heating' in r.acts %}{% set action = 'heating' %}
+          {% elif 'cooling' in r.acts %}{% set action = 'cooling' %}
+          {% elif units and r.off == units %}{% set action = 'off' %}
+          {% else %}{% set action = 'idle' %}{% endif %}
+          {% set name = area_name(area) | replace('|', ' ') | replace(';', ' ') %}
+          {% set ns.out = ns.out + [area ~ '|' ~ name ~ '|' ~ temp ~ '|' ~ target ~ '|' ~ action ~ '|' ~ icon] %}
+        {% endfor %}
+        {{ 'v1;' ~ (ns.out | join(';')) }}
+  - action: esphome.thermostat_wt32s3_21s_set_rooms
+    data:
+      data: "{{ payload }}"
+  - action: esphome.thermostat_wt32s3_21s_set_controller
+    data:
+      name: "{{ (this.attributes.friendly_name | default(this.entity_id)) ~ ' (' ~ this.entity_id ~ ')' }}"
+    continue_on_error: true
+
+  # Weather: "w1;" then condition|temp|feels|humidity|wind|wind_unit|high|low|rain|precip.
+  # Empty fields are unknown. "w1;" alone tells the thermostat there is no weather.
+  - if:
+      - condition: template
+        value_template: "{{ weather_entity != '' }}"
+    then:
+      - action: weather.get_forecasts
+        target:
+          entity_id: "{{ weather_entity }}"
+        data:
+          type: daily
+        response_variable: forecast
+        continue_on_error: true
+      - variables:
+          weather_payload: >-
+            {% set day = (forecast[weather_entity].forecast[0] if forecast is defined and forecast and weather_entity in forecast and forecast[weather_entity].forecast else {}) %}
+            {% set cond = states(weather_entity) if states(weather_entity) not in ['unavailable', 'unknown'] else '' %}
+            {% set t = states(outdoor_temperature) if outdoor_temperature != '' and is_number(states(outdoor_temperature)) else state_attr(weather_entity, 'temperature') %}
+            {% set f = states(feels_like) if feels_like != '' and is_number(states(feels_like)) else state_attr(weather_entity, 'apparent_temperature') %}
+            {% set h = states(outdoor_humidity) if outdoor_humidity != '' and is_number(states(outdoor_humidity)) else state_attr(weather_entity, 'humidity') %}
+            {% set w = state_attr(weather_entity, 'wind_speed') %}
+            {% set wu = state_attr(weather_entity, 'wind_speed_unit') or '' %}
+            {% set hi = day.get('temperature') %}
+            {% set lo = day.get('templow') %}
+            {% set rain = day.get('precipitation_probability') %}
+            {% set pr = day.get('precipitation') %}
+            {{ 'w1;' ~ cond ~ '|'
+               ~ ((t | float | round(1)) if is_number(t) else '') ~ '|'
+               ~ ((f | float | round(1)) if is_number(f) else '') ~ '|'
+               ~ ((h | float | round(0)) if is_number(h) else '') ~ '|'
+               ~ ((w | float | round(0)) if is_number(w) else '') ~ '|'
+               ~ (wu | replace('|', '') | replace(';', '')) ~ '|'
+               ~ ((hi | float | round(1)) if is_number(hi) else '') ~ '|'
+               ~ ((lo | float | round(1)) if is_number(lo) else '') ~ '|'
+               ~ ((rain | float | round(0)) if is_number(rain) else '') ~ '|'
+               ~ ((pr | float | round(1)) if is_number(pr) else '') }}
+      - action: esphome.thermostat_wt32s3_21s_set_weather
+        data:
+          data: "{{ weather_payload }}"
+    else:
+      - action: esphome.thermostat_wt32s3_21s_set_weather
+        data:
+          data: "w1;"
