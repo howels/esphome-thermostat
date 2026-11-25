@@ -82,7 +82,7 @@ esphome:
   # so the blueprint device selector lists only this firmware.
   project:
     name: howels.thermostat
-    version: "1.0.0"
+    version: "1.0.1"
   includes:
     - thermostat_rooms.h
     - thermostat_weather.h

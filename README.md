@@ -56,6 +56,8 @@ A change to the blueprint inputs, the `node` field on the thermostat events, or 
 
 `v1.0.0` is the first release. It breaks automations imported from earlier unversioned `main`: the Room targets entity input is removed, each automation selects one thermostat, and the firmware that publishes project `howels.thermostat` and the Node name sensor must be flashed before that thermostat appears in the list. One automation per device uses the same blueprint.
 
+`v1.0.1` keeps sending the room list when a climate device does not respond. Re-import the blueprint from that tag. The firmware change is the version string only.
+
 From the repository root, after the version commit is on `main`:
 
 ```bash
