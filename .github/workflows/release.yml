@@ -21,6 +21,8 @@ jobs:
         run: |
           set -eu
           tag="${GITHUB_REF_NAME}"
+          # checkout peels an annotated tag to its commit, so fetch the tag object itself.
+          git fetch origin "+refs/tags/${tag}:refs/tags/${tag}"
           if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Tag ${tag} is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease"
             exit 1
