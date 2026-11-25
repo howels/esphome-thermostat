@@ -37,9 +37,10 @@ blueprint:
       setpoint is lowered by that gap so it continues cooling until the
       external sensor reaches the target. Gaps above the max offset or sensor
       readings outside 0–45 °C are ignored.
-    To enable continuous 1-minute offset tracking without runaway, select the
-    thermostat's "Room targets" text entity (created automatically once the
-    firmware is flashed). You can leave it empty during initial setup.
+    To enable continuous 1-minute offset tracking without runaway, the
+    automation writes requested targets to the "Room targets" text entity on
+    the selected thermostat. That entity is found from the device on every
+    run.
 
 
     Request for T degrees from the thermostat.
@@ -62,12 +63,27 @@ blueprint:
     matching weather entity attributes when numeric.
 
 
-    The automation uses esphome.thermostat_wt32s3_21s_set_rooms and
-    esphome.thermostat_wt32s3_21s_set_weather, and listens for
-    esphome.thermostat_room_set and esphome.thermostat_rooms_request. The
-    ESPHome device must be allowed to perform Home Assistant actions.
+    Create one automation from this blueprint for each thermostat and select
+    that thermostat. The automation calls esphome.<node>_set_rooms,
+    esphome.<node>_set_weather and esphome.<node>_set_controller, where <node>
+    is the device's Node name sensor. It listens for esphome.thermostat_room_set
+    and esphome.thermostat_rooms_request and acts only when the event's node
+    matches the selected device. The ESPHome device must be allowed to perform
+    Home Assistant actions. Flash the firmware that publishes Node name and
+    the project howels.thermostat before selecting the device.
   domain: automation
   input:
+    thermostat_device:
+      name: Thermostat
+      description: >-
+        The ESPHome thermostat this automation controls. Create a separate
+        automation for each thermostat. Room targets and the controller link
+        are resolved from this device on every run.
+      selector:
+        device:
+          integration: esphome
+          manufacturer: howels
+          model: thermostat
     room_1:
       name: Room 1
       collapsed: false
@@ -438,18 +454,6 @@ blueprint:
         entity:
           filter:
             - domain: climate
-    room_targets_entity:
-      name: Room targets store entity
-      description: >-
-        Optional. Pick the "Room targets" text entity exposed by the thermostat
-        firmware (e.g. text.thermostat_wt32s3_21s_..._room_targets) to remember
-        requested room targets for continuous external-sensor offset tracking.
-        Leave empty during initial setup before flashing the firmware.
-      default: ""
-      selector:
-        entity:
-          filter:
-            - domain: text
     exclude_label:
       name: Exclusion label
       description: Optional. Entities with this label are ignored.
@@ -599,7 +603,17 @@ variables:
     {{ ns.out }}
   rooms_in: "{{ room_slots | map(attribute='area') | list }}"
   central: !input central_climate
-  targets_entity: !input room_targets_entity
+  thermostat_device: !input thermostat_device
+  node_entity: >-
+    {% set found = device_entities(thermostat_device) | select('search', '_node_name$') | list %}
+    {{ found[0] if found else '' }}
+  node_name: >-
+    {% set n = states(node_entity) if node_entity else '' %}
+    {{ n if n not in ['unknown', 'unavailable', 'none', ''] else '' }}
+  targets_entity: >-
+    {% set found = device_entities(thermostat_device) | select('match', '^text\.') | select('search', '_room_targets$') | list %}
+    {{ found[0] if found else '' }}
+  action_prefix: "esphome.{{ node_name | replace('-', '_') }}"
   exclude_label: !input exclude_label
   limit_trvs: !input limit_trvs_to_central
   raise_central: !input raise_central
@@ -622,6 +636,11 @@ variables:
       {% endfor %}
     {% endif %}
     {{ ns.m }}
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ node_name != '' and (trigger.platform != 'event' or trigger.event.data.node == node_name) }}
 
 actions:
   # Branch 1: A temperature request from the thermostat dial.
@@ -985,10 +1004,10 @@ actions:
           {% set ns.out = ns.out + [area ~ '|' ~ name ~ '|' ~ temp ~ '|' ~ target ~ '|' ~ action ~ '|' ~ icon] %}
         {% endfor %}
         {{ 'v1;' ~ (ns.out | join(';')) }}
-  - action: esphome.thermostat_wt32s3_21s_set_rooms
+  - action: "{{ action_prefix ~ '_set_rooms' }}"
     data:
       data: "{{ payload }}"
-  - action: esphome.thermostat_wt32s3_21s_set_controller
+  - action: "{{ action_prefix ~ '_set_controller' }}"
     data:
       name: "{{ (this.attributes.friendly_name | default(this.entity_id)) ~ ' (' ~ this.entity_id ~ ')' }}"
     continue_on_error: true
@@ -1029,10 +1048,10 @@ actions:
                ~ ((lo | float | round(1)) if is_number(lo) else '') ~ '|'
                ~ ((rain | float | round(0)) if is_number(rain) else '') ~ '|'
                ~ ((pr | float | round(1)) if is_number(pr) else '') }}
-      - action: esphome.thermostat_wt32s3_21s_set_weather
+      - action: "{{ action_prefix ~ '_set_weather' }}"
         data:
           data: "{{ weather_payload }}"
     else:
-      - action: esphome.thermostat_wt32s3_21s_set_weather
+      - action: "{{ action_prefix ~ '_set_weather' }}"
         data:
           data: "w1;"

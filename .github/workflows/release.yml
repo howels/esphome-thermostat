@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a semver tag that matches the firmware version
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag ${tag} is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease"
+            exit 1
+          fi
+          version="${tag#v}"
+          base="${version%%-*}"
+          file_version="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' esphome/thermostat-wt32s3-21s-base.yaml)"
+          if [[ "$(printf '%s\n' "$file_version" | wc -l)" -ne 1 || "$file_version" != "$base" ]]; then
+            echo "esphome.project.version is '${file_version}', tag ${tag} requires '${base}'"
+            exit 1
+          fi
+          if ! git cat-file tag "$tag" >/dev/null 2>&1; then
+            echo "Tag ${tag} is lightweight. Create an annotated tag so the message becomes the release notes."
+            exit 1
+          fi
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          args=(release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-from-tag)
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"

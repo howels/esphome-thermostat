@@ -21,7 +21,8 @@ preferences:
 # Enable Home Assistant API
 api:
   reboot_timeout: 1h
-  # HA calls esphome.thermostat_wt32s3_21s_set_rooms with the room list.
+  # The blueprint calls esphome.<node_name>_set_rooms. <node_name> is App.get_name()
+  # with '-' replaced by '_', published by the Node name text sensor.
   actions:
     - action: set_rooms
       variables:
@@ -40,7 +41,7 @@ api:
             format: "rooms: %s"
             args: [ 'thermostat_rooms.summary().c_str()' ]
         - script.execute: refresh_rooms_ui
-    # HA calls esphome.thermostat_wt32s3_21s_set_weather with the outdoor conditions.
+    # The blueprint calls esphome.<node_name>_set_weather with the outdoor conditions.
     - action: set_weather
       variables:
         data: string
@@ -50,7 +51,7 @@ api:
             format: "weather: %s %s %s"
             args: [ 'thermostat_weather.condition.c_str()', 'thermostat_weather.temp_text().c_str()', 'thermostat_weather.forecast_line().c_str()' ]
         - script.execute: refresh_weather_ui
-    # HA calls esphome.thermostat_wt32s3_21s_set_controller with the automation name/entity_id.
+    # The blueprint calls esphome.<node_name>_set_controller with the automation name/entity_id.
     - action: set_controller
       variables:
         name: string
@@ -63,6 +64,8 @@ api:
   on_client_connected:
     - homeassistant.event:
         event: ${rooms_request_event}
+        data:
+          node: !lambda 'return App.get_name();'
 
 captive_portal:
 
@@ -75,6 +78,11 @@ esphome:
   name_add_mac_suffix: False
   friendly_name: ${friendly_name}
   comment: ${device_description}
+  # Home Assistant uses the namespace as manufacturer and the name as model,
+  # so the blueprint device selector lists only this firmware.
+  project:
+    name: howels.thermostat
+    version: "1.0.0"
   includes:
     - thermostat_rooms.h
     - thermostat_weather.h
@@ -221,6 +229,7 @@ text:
   - platform: template
     name: Room targets
     id: room_targets_store
+    # The name yields the entity id suffix _room_targets, which the blueprint matches.
     icon: mdi:thermometer-lines
     entity_category: config
     mode: text
@@ -418,6 +427,17 @@ text_sensor:
     id: controller_automation
     icon: mdi:robot-outline
     entity_category: diagnostic
+
+  # App.get_name(), which is the node name Home Assistant uses to build
+  # esphome.<node>_set_rooms, _set_weather and _set_controller.
+  - platform: template
+    name: Node name
+    id: node_name_sensor
+    icon: mdi:router-network
+    entity_category: diagnostic
+    lambda: |-
+      return std::string(App.get_name());
+    update_interval: 60s
 
   - platform: debug
     reset_reason:
@@ -1925,6 +1945,8 @@ script:
       - script.execute: ui_lock
       - homeassistant.event:
           event: ${rooms_request_event}
+          data:
+            node: !lambda 'return App.get_name();'
       - script.execute: refresh_rooms_ui
       - lvgl.page.show:
           id: rooms_page
@@ -2164,6 +2186,7 @@ script:
             - homeassistant.event:
                 event: ${room_set_event}
                 data:
+                  node: !lambda 'return App.get_name();'
                   room: !lambda 'return thermostat_rooms.room[id(sel_room) - 1].id;'
                   temperature: !lambda 'return id(room_set_target);'
       # Keep the local value until HA sends the updated list (about 2 s), with a timeout.
