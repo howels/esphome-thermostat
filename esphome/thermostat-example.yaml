@@ -1,6 +1,6 @@
 # Example local device configuration for the WT32S3-21S rotary thermostat.
-# Keep secrets, Wi-Fi credentials, API encryption key and OTA password in this
-# file (or in secrets.yaml). Everything else lives in thermostat-wt32s3-21s-base.yaml.
+# Keep secrets, Wi-Fi credentials and the API encryption key in this file
+# (or in secrets.yaml). Everything else lives in thermostat-wt32s3-21s-base.yaml.
 
 substitutions:
   hostname: 'thermostat-wt32s3-21s'
@@ -25,7 +25,6 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret thermostat_ota_password
 
 packages:
   thermostat: !include thermostat-wt32s3-21s-base.yaml
