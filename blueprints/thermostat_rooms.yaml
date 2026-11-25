@@ -715,6 +715,7 @@ actions:
             value_template: "{{ raise_central and central_on and requested > central_target }}"
         then:
           - action: climate.set_temperature
+            continue_on_error: true
             target:
               entity_id: "{{ central }}"
             data:
@@ -728,6 +729,7 @@ actions:
                   value_template: "{{ states(repeat.item) not in ['off', 'unavailable', 'unknown'] }}"
               then:
                 - action: climate.set_temperature
+                  continue_on_error: true
                   target:
                     entity_id: "{{ repeat.item }}"
                   data:
@@ -761,6 +763,7 @@ actions:
                   value_template: "{{ states(repeat.item) in ['heat', 'cool'] }}"
               then:
                 - action: climate.set_temperature
+                  continue_on_error: true
                   target:
                     entity_id: "{{ repeat.item }}"
                   data:
@@ -812,11 +815,13 @@ actions:
                   value_template: "{{ states(repeat.item) == 'off' and 'heat' in (state_attr(repeat.item, 'hvac_modes') or []) }}"
               then:
                 - action: climate.set_hvac_mode
+                  continue_on_error: true
                   target:
                     entity_id: "{{ repeat.item }}"
                   data:
                     hvac_mode: heat
                 - action: climate.set_temperature
+                  continue_on_error: true
                   target:
                     entity_id: "{{ repeat.item }}"
                   data:
@@ -934,6 +939,7 @@ actions:
           for_each: "{{ offset_adjustments }}"
           sequence:
             - action: climate.set_temperature
+              continue_on_error: true
               target:
                 entity_id: "{{ repeat.item.entity_id }}"
               data:
@@ -1005,6 +1011,7 @@ actions:
         {% endfor %}
         {{ 'v1;' ~ (ns.out | join(';')) }}
   - action: "{{ action_prefix ~ '_set_rooms' }}"
+    continue_on_error: true
     data:
       data: "{{ payload }}"
   - action: "{{ action_prefix ~ '_set_controller' }}"
@@ -1049,9 +1056,11 @@ actions:
                ~ ((rain | float | round(0)) if is_number(rain) else '') ~ '|'
                ~ ((pr | float | round(1)) if is_number(pr) else '') }}
       - action: "{{ action_prefix ~ '_set_weather' }}"
+        continue_on_error: true
         data:
           data: "{{ weather_payload }}"
     else:
       - action: "{{ action_prefix ~ '_set_weather' }}"
+        continue_on_error: true
         data:
           data: "w1;"
