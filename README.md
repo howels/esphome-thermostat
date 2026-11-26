@@ -48,6 +48,8 @@ Each room accepts an optional external temperature sensor (otherwise the bluepri
 
 Requested room targets are stored in the selected thermostat's `Room targets` text entity, found from the device on every run, so periodic one-minute re-evaluation adjusts units without runaway. Readings outside 0–45 °C or gaps larger than the configured maximum offset are ignored, and the final setpoint is always clamped to `requested ± max_offset` and the unit's own min/max limits.
 
+Every run also switches a unit off when the room is already at or past the setpoint in the direction that unit is working, including a unit turned on outside this automation or restored after a Home Assistant restart. An air conditioner in heat is switched off at or above the room target, and one in cool at or below it. A radiator valve is switched off only when it reports that it is still heating. A valve left idle in heat mode stays in that mode. A unit switched off by this guard stays off. A later dial request does not turn a radiator valve back on. Air conditioning assist can turn an air conditioner back to heat when its conditions are met.
+
 ## Releases
 
 Versions are Git tags of the form `vMAJOR.MINOR.PATCH`. A tag with a hyphenated suffix, such as `v1.1.0-rc.1`, is a pre-release. Pushing the tag runs `.github/workflows/release.yml`. The workflow checks that `esphome.project.version` in `esphome/thermostat-wt32s3-21s-base.yaml` equals the tag with the leading `v` and any pre-release suffix removed, then opens a GitHub release. The release notes are the annotated tag message. A lightweight tag has no message, and the workflow fails.

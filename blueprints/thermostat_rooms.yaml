@@ -53,8 +53,24 @@ blueprint:
        or cooling offset), unless the policy says to leave them alone.
     4. If "Air conditioning assist" is on, T is above what the valves are
        allowed, and the room is colder than T by more than the gap, air
-       conditioning units that are off are switched to heat at T. Nothing in
-       this automation switches them off again.
+       conditioning units that are off are switched to heat at T.
+
+
+    Runaway guard. Every run, including the one-minute refresh and Home
+    Assistant start, switches a unit off when the room is already at or past
+    the setpoint in the direction that unit is working. The setpoint is the
+    stored room target, or the unit's own target when this automation has no
+    stored target for that room. This catches a unit switched on at the
+    appliance, by another automation, or restored after a restart.
+    - An air conditioner in heat is switched off when the room is at or above
+      the setpoint. One in cool is switched off when the room is at or below
+      it. heat_cool and auto follow the current hvac_action.
+    - A radiator valve is switched off only when it is still actively heating
+      and the room is already at or above the setpoint. A valve that is idle
+      in heat mode is left alone, so it can heat again when the room falls.
+    A unit this guard switches off stays off. The next dial request does not
+    turn a radiator valve back on. Air conditioning assist can turn an air
+    conditioner back to heat on a later request, when its conditions are met.
 
 
     Weather. Outdoor conditions are pushed alongside the room list. Today's
@@ -944,6 +960,79 @@ actions:
                 entity_id: "{{ repeat.item.entity_id }}"
               data:
                 temperature: "{{ repeat.item.temperature }}"
+
+  # Stop a unit that is still heating or cooling after the room has reached
+  # the setpoint, including a unit switched on outside this run.
+  - variables:
+      shutdowns: >-
+        {% set excluded = label_entities(exclude_label) if exclude_label else [] %}
+        {% set ns = namespace(ids=[]) %}
+        {% for slot in room_slots %}
+          {% set area = slot.area %}
+          {% set ext_sensor = slot.sensor or '' %}
+          {% set inroom = area_entities(area) | reject('in', excluded) | list %}
+          {% set r = namespace(trv=[], ac=[], sens=[]) %}
+          {% for e in inroom | select('match', '^climate[.]') | reject('eq', central) %}
+            {% if 'cool' in (state_attr(e, 'hvac_modes') or []) %}
+              {% set r.ac = r.ac + [e] %}
+            {% else %}
+              {% set r.trv = r.trv + [e] %}
+            {% endif %}
+          {% endfor %}
+          {% if ext_sensor != '' and is_number(states(ext_sensor)) %}
+            {% set r.sens = [states(ext_sensor) | float] %}
+          {% else %}
+            {% for e in inroom | select('match', '^sensor[.]') if not (e | regex_search('device|outdoor|battery|cpu|mcu|raspberry|extruder|aggregate')) and is_state_attr(e, 'device_class', 'temperature') and is_number(states(e)) %}
+              {% set r.sens = r.sens + [states(e) | float] %}
+            {% endfor %}
+          {% endif %}
+          {% if (r.sens | length) > 0 %}
+            {% set sp_s = r.sens | sort %}
+            {% set n = sp_s | length %}
+            {% set room_temp = (sp_s[n // 2] if n % 2 else (sp_s[n // 2 - 1] + sp_s[n // 2]) / 2) %}
+          {% else %}
+            {% set room_temp = none %}
+          {% endif %}
+          {% if trigger.id == 'set' and trigger.event.data.room == area %}
+            {% set sp_room = [[trigger.event.data.temperature | float(20), 4.0] | max, 35.0] | min %}
+          {% elif area in stored_targets %}
+            {% set sp_room = stored_targets[area] | float %}
+          {% else %}
+            {% set sp_room = none %}
+          {% endif %}
+          {% for e in r.ac %}
+            {% set mode = states(e) %}
+            {% set action = state_attr(e, 'hvac_action') or '' %}
+            {% set unit_temp = state_attr(e, 'current_temperature') %}
+            {% set temp = room_temp if room_temp is not none else (unit_temp | float if is_number(unit_temp) else none) %}
+            {% set own = state_attr(e, 'temperature') %}
+            {% set sp = sp_room if sp_room is not none else (own | float if is_number(own) else none) %}
+            {% set heating = mode == 'heat' or (mode in ['heat_cool', 'auto'] and action in ['heating', 'preheating']) %}
+            {% set cooling = mode == 'cool' or (mode in ['heat_cool', 'auto'] and action == 'cooling') %}
+            {% if temp is not none and sp is not none and ((heating and temp >= sp) or (cooling and temp <= sp)) %}
+              {% set ns.ids = ns.ids + [e] %}
+            {% endif %}
+          {% endfor %}
+          {% for e in r.trv if states(e) == 'heat' and (state_attr(e, 'hvac_action') or '') in ['heating', 'preheating'] %}
+            {% set unit_temp = state_attr(e, 'current_temperature') %}
+            {% set temp = room_temp if room_temp is not none else (unit_temp | float if is_number(unit_temp) else none) %}
+            {% set own = state_attr(e, 'temperature') %}
+            {% set sp = sp_room if sp_room is not none else (own | float if is_number(own) else none) %}
+            {% if temp is not none and sp is not none and temp >= sp %}
+              {% set ns.ids = ns.ids + [e] %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+        {{ ns.ids }}
+  - repeat:
+      for_each: "{{ shutdowns }}"
+      sequence:
+        - action: climate.set_hvac_mode
+          continue_on_error: true
+          target:
+            entity_id: "{{ repeat.item }}"
+          data:
+            hvac_mode: "off"
 
   # Room list: "v1;" then one record per room, area_id|name|temperature|target|action|icon.
   - variables:
