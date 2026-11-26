@@ -60,6 +60,8 @@ A change to the blueprint inputs, the `node` field on the thermostat events, or 
 
 `v1.0.1` keeps sending the room list when a climate device does not respond. Re-import the blueprint from that tag. The firmware change is the version string only.
 
+`v1.1.0` adds the runaway guard. Each run switches off an air conditioner that is heating at or above the room target, or cooling at or below it, and a radiator valve that is still heating once the room is at or above target. The guard covers units switched on outside the automation and units restored after a Home Assistant restart. The release workflow uses `actions/checkout@v7`. The firmware change is the version string only. Re-import the blueprint from `main` or from `v1.1.0`.
+
 From the repository root, after the version commit is on `main`:
 
 ```bash
